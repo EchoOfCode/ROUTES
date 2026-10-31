@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,6 +16,7 @@ class Remediation(IdMixin, TimestampMixin, Base):
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     finding_status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     error: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -36,6 +37,7 @@ class RemediationIteration(IdMixin, TimestampMixin, Base):
     round_no: Mapped[int | None] = mapped_column(Integer)
     batch_id: Mapped[str | None] = mapped_column(String(64))
     candidate_hash: Mapped[str | None] = mapped_column(String(64))
+    candidate_code: Mapped[str | None] = mapped_column(Text)
     test_results: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     rescan_diff: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     failure_output: Mapped[str | None] = mapped_column(Text)

@@ -93,21 +93,30 @@ def run_remediate_job(job_id: str, finding_id: str) -> None:
                 finding_dict = {"id": str(finding.id), "rule_id": finding.rule_id, "title": finding.title,
                                "plain_description": finding.plain_description, "fingerprint": finding.fingerprint}
 
+                def should_cancel() -> bool:
+                    db.refresh(remediation)
+                    return remediation.cancel_requested
+
                 outcome = run_remediation_loop(
                     finding=finding_dict, snapshot=snapshot, llm_a_client=llm_a_client, llm_b_client=llm_b_client,
                     sandbox_runner=sandbox_runner, source_ref=source_ref, baseline_fingerprints=baseline_fingerprints,
                     max_rounds=settings.max_rounds, stagnation_rounds=settings.stagnation_rounds,
+                    should_cancel=should_cancel,
                 )
 
                 for record in outcome.rounds:
                     db.add(RemediationIteration(
                         remediation_id=remediation.id, iteration_no=record.round_no, round_no=record.round_no,
-                        candidate_hash=record.candidate_hash, test_results=record.test_results,
-                        rescan_diff=record.rescan_diff, failure_output=record.failure_output,
+                        candidate_hash=record.candidate_hash, candidate_code=record.candidate_code,
+                        test_results=record.test_results, rescan_diff=record.rescan_diff,
+                        failure_output=record.failure_output,
                     ))
 
                 if outcome.status == "fixed":
                     _finish(db, remediation, RemediationStatus.SUCCEEDED, FindingRemediationStatus.FIXED, None)
+                elif outcome.status == "cancelled":
+                    _finish(db, remediation, RemediationStatus.CANCELLED, FindingRemediationStatus.OPEN,
+                            outcome.reason)
                 else:
                     _finish(db, remediation, RemediationStatus.NEEDS_HUMAN_REVIEW,
                             FindingRemediationStatus.NEEDS_HUMAN_REVIEW, outcome.reason)

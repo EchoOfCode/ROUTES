@@ -22,14 +22,17 @@ Per run:
      and no new fingerprint appeared.
   3. Stop: success -> FIXED. The same candidate hash repeating
      STAGNATION_ROUNDS times in a row -> NEEDS_HUMAN_REVIEW (oscillation).
-     MAX_ROUNDS exhausted -> NEEDS_HUMAN_REVIEW. Otherwise the previous
-     round's (redacted) failure detail is fed into the next LLM B call.
+     MAX_ROUNDS exhausted -> NEEDS_HUMAN_REVIEW. A cancellation request
+     (checked via `should_cancel` at the top of each round) -> CANCELLED.
+     Otherwise the previous round's (redacted) failure detail is fed into
+     the next LLM B call.
 """
 
 from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from routes_shared.fingerprint import normalize_snippet
@@ -48,6 +51,7 @@ MAX_TESTBENCH_ATTEMPTS = 3  # 1 initial + 2 regenerations, per "regenerate (max 
 class RoundRecord:
     round_no: int
     candidate_hash: str | None = None
+    candidate_code: str | None = None
     test_results: dict = field(default_factory=dict)
     rescan_diff: dict = field(default_factory=dict)
     failure_output: str | None = None
@@ -55,7 +59,7 @@ class RoundRecord:
 
 @dataclass
 class LoopOutcome:
-    status: str  # "fixed" | "needs_human_review"
+    status: str  # "fixed" | "needs_human_review" | "cancelled"
     reason: str | None = None
     rounds: list[RoundRecord] = field(default_factory=list)
 
@@ -87,7 +91,8 @@ def _establish_testbench(llm_a_client: LLMClient, sandbox_runner: SandboxRunner,
 
 def run_remediation_loop(*, finding: dict, snapshot: Snapshot, llm_a_client: LLMClient, llm_b_client: LLMClient,
                          sandbox_runner: SandboxRunner, source_ref: SourceRef, baseline_fingerprints: set[str],
-                         max_rounds: int = 5, stagnation_rounds: int = 2) -> LoopOutcome:
+                         max_rounds: int = 5, stagnation_rounds: int = 2,
+                         should_cancel: Callable[[], bool] | None = None) -> LoopOutcome:
     established = _establish_testbench(llm_a_client, sandbox_runner, finding, snapshot)
     if established is None:
         return LoopOutcome(status="needs_human_review",
@@ -103,6 +108,9 @@ def run_remediation_loop(*, finding: dict, snapshot: Snapshot, llm_a_client: LLM
     recent_hashes: list[str] = []
 
     for round_no in range(1, max_rounds + 1):
+        if should_cancel is not None and should_cancel():
+            return LoopOutcome(status="cancelled", reason="cancelled by request", rounds=rounds)
+
         record = RoundRecord(round_no=round_no)
 
         llm_b_result = call_llm_b(llm_b_client, llm_a_result, snapshot, constraints,
@@ -116,6 +124,7 @@ def run_remediation_loop(*, finding: dict, snapshot: Snapshot, llm_a_client: LLM
 
         candidate_hash = _candidate_hash(llm_b_result.fixed_code)
         record.candidate_hash = candidate_hash
+        record.candidate_code = llm_b_result.fixed_code
         recent_hashes.append(candidate_hash)
         if len(recent_hashes) >= stagnation_rounds and len(set(recent_hashes[-stagnation_rounds:])) == 1:
             record.failure_output = "oscillation: identical candidate repeated"

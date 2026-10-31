@@ -139,7 +139,29 @@ def test_remediate_job_fixes_the_finding_and_persists_iterations(db, monkeypatch
     assert len(iterations) == 1
     assert iterations[0].round_no == 1
     assert iterations[0].candidate_hash is not None
+    assert iterations[0].candidate_code is not None and "pool.query" in iterations[0].candidate_code
     assert iterations[0].rescan_diff == {"fingerprint_gone": True, "new_fingerprints": []}
+
+
+def test_remediate_job_stops_when_cancelled_before_the_first_round(db, monkeypatch):
+    finding = make_finding(db)
+    remediation = _remediation_for(db, finding)
+    remediation.cancel_requested = True
+    db.commit()
+
+    monkeypatch.setattr(remediate, "LLMClient",
+                        _fake_llm_factory({"llama-3.3-70b-versatile": [LLM_A_CONTENT]}))
+    sandbox = FakeSandboxRunner([_gated_ok() for _ in range(1 + N_BAD_FIXES)])
+    monkeypatch.setattr(remediate, "build_sandbox_runner", lambda kind, **kw: sandbox)
+
+    remediate.run_remediate_job(str(remediation.id), str(finding.id))
+
+    db.expire_all()
+    row = db.get(Remediation, remediation.id)
+    assert row.status == RemediationStatus.CANCELLED
+    assert db.scalars(
+        select(RemediationIteration).where(RemediationIteration.remediation_id == remediation.id)
+    ).all() == []
 
 
 def test_remediate_job_needs_human_review_when_no_snapshot(db, monkeypatch):

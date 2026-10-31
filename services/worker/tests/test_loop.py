@@ -196,3 +196,31 @@ def test_oscillation_stops_early_on_a_repeated_candidate():
     assert outcome.status == "needs_human_review"
     assert "oscillation" in outcome.reason
     assert len(outcome.rounds) == 2  # stopped at round 2, never reached round 3+
+
+
+def test_cancellation_is_checked_before_each_round():
+    sandbox = FakeSandboxRunner(_gate_phase_results())  # no verify/rescan calls expected
+
+    outcome = run_remediation_loop(
+        finding=FINDING, snapshot=SNAPSHOT, llm_a_client=_sequenced_client([LLM_A_CONTENT]),
+        llm_b_client=_sequenced_client([]), sandbox_runner=sandbox, source_ref=SOURCE_REF,
+        baseline_fingerprints=set(), max_rounds=5, stagnation_rounds=2, should_cancel=lambda: True,
+    )
+
+    assert outcome.status == "cancelled"
+    assert outcome.rounds == []  # cancelled before round 1 even called LLM B
+
+
+def test_fixed_on_the_first_try_records_the_candidate_code():
+    sandbox = FakeSandboxRunner(_gate_phase_results() + [_verify_pass(), _rescan([])])
+    candidate = _candidate(1)
+
+    outcome = run_remediation_loop(
+        finding=FINDING, snapshot=SNAPSHOT, llm_a_client=_sequenced_client([LLM_A_CONTENT]),
+        llm_b_client=_sequenced_client([candidate]), sandbox_runner=sandbox, source_ref=SOURCE_REF,
+        baseline_fingerprints=set(), max_rounds=5, stagnation_rounds=2,
+    )
+
+    assert outcome.status == "fixed"
+    assert outcome.rounds[0].candidate_code is not None
+    assert "_attempt = 1" in outcome.rounds[0].candidate_code

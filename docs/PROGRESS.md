@@ -820,3 +820,65 @@ $ docker compose run --rm --no-deps -v "$PWD/services/api/tests:/srv/api/tests" 
 - Still SQLi-only in practice: the gate's known-bad-fix library (S7) and
   the fixed exploit-payload list (S6b) are both SQLi-only, so XSS findings
   would reach the loop but the gate's second check is a no-op for them.
+
+## S9a — cancellation + persisting the candidate code
+
+**Branch:** `feat/remediation-s9a-cancel-and-candidate` (off `feat/remediation-loop`,
+after S8c). First of three S9 sub-steps.
+**Status: DONE**
+
+Two gaps surfaced while planning the API/UI step, fixed before building on
+top of them: `POST .../cancel` would have been a no-op (nothing checked for
+a cancellation request mid-run), and the UI's before/after diff would have
+had no actual code to show (only `candidate_hash` was ever persisted).
+
+### Files changed
+- `services/api/app/models/remediation.py` + `0006_remediation_cancel_and_candidate.py`
+  — `Remediation.cancel_requested` (bool, default false) and
+  `RemediationIteration.candidate_code` (text, nullable).
+- `services/worker/loop.py` — `run_remediation_loop` gained an optional
+  `should_cancel: Callable[[], bool]` parameter, checked at the top of
+  each round; a true result ends the loop with `LoopOutcome(status="cancelled")`
+  before round 1 even calls LLM B if requested early enough.
+  `RoundRecord.candidate_code` now carries the actual fixed code text
+  alongside its hash.
+- `services/worker/jobs/remediate.py` — wires `should_cancel` to
+  `db.refresh(remediation); return remediation.cancel_requested` (so an
+  out-of-band `UPDATE` from a future cancel endpoint, in a different
+  session/transaction, is picked up between rounds); persists
+  `candidate_code` on each `RemediationIteration`; maps `"cancelled"` to
+  `RemediationStatus.CANCELLED`.
+- `services/worker/tests/test_loop.py` — cancellation stops before round 1
+  ever calls LLM B; a fixed-on-try-1 outcome now also asserts
+  `candidate_code` is recorded.
+- `services/worker/tests/test_remediate_job.py` — `cancel_requested=True`
+  set before the job runs stops it with zero iterations persisted; the
+  fixed-finding test now also asserts the real code text, not just the
+  hash, made it into the DB row.
+
+### Acceptance (raw output)
+
+```
+$ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /srv \
+    -e PYTHONPATH=/srv:/srv/api --entrypoint python migrate -m pytest -q worker/tests
+..............................................................           [100%]
+62 passed, 5 warnings in 1.22s
+
+$ docker compose run --rm --no-deps -v "$PWD/services/api/tests:/srv/api/tests" migrate python -m pytest -q tests
+................................                                         [100%]
+32 passed, 2 warnings in 4.99s
+```
+62 worker tests = 59 from S8c + 3 new (2 in `test_loop.py`, 1 in
+`test_remediate_job.py`).
+
+### Not working / stubbed / assumed
+
+- Cancellation is only checked **between rounds**, not mid-round — a round
+  already in flight (an LLM call or a sandbox run already dispatched)
+  still runs to completion before the next cancellation check. No
+  mid-round abort mechanism exists or was asked for.
+- `FindingRemediationStatus` has no `CANCELLED` value, so a cancelled run's
+  `finding_status` is set to `OPEN` (still unresolved) rather than a
+  dedicated state - matches what the enum already supports, not a new gap.
+- The cancel **endpoint** itself doesn't exist yet - this step only builds
+  the mechanism the endpoint (S9b) will set a flag for.
