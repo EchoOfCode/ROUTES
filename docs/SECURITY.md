@@ -41,7 +41,7 @@ Sandbox networks are created with `internal: true`, so a sandbox has **no route*
 For each run the manager opens a session bound to (a) a random token, (b) the run network's subnet and (c) a mode:
 
 - **web** (discovery): only the exact submitted hostname; ports 80/443 (+8080/8443 if submitted); only `CONNECT` and absolute-form `GET/HEAD`; no request bodies.
-- **github_import** (source): only `GET /import`. The gateway itself fetches the tarball from `api.github.com`, following a redirect only to `codeload.github.com`, with a 100 MB cap.
+- **github_import** (source): only `GET /import`. The gateway itself fetches the archive, with a 100 MB cap. Private repositories: `api.github.com` with the token, following a redirect only to `codeload.github.com` (without the token). Public repositories: `codeload.github.com` directly, so imports do not use GitHub's unauthenticated API limit of 60 requests per hour.
 
 For every connection the gateway resolves DNS itself, rejects the destination if **any** resolved address is loopback, private (RFC 1918 / ULA), link-local (including `169.254.169.254` and `fd00:ec2::254`), CGNAT, multicast, reserved, NAT64/6to4/Teredo-wrapped internal, or unspecified, and then connects to the **validated IP** (no second lookup). This prevents DNS rebinding. Each redirect is a new request and is validated again. Per-session byte limits and idle and lifetime timeouts apply. Allowed and denied destinations are logged per session and summarised on the assessment.
 

@@ -85,6 +85,10 @@ rules:
     patterns:
       - pattern-regex: (?i)\b[a-z0-9_]*(secret|passwd|password|api_?key|apikey|auth_?token|access_?token|private_?key)[a-z0-9_]*["']?\s*[:=]\s*["'][^"'\s]{12,}["']
       - pattern-not-regex: (?i)(example|changeme|change_me|your[_-]|xxxx|placeholder|dummy|sample|test|redacted|\*\*\*|process\.env|<[a-z_]+>|\$\{)
+      # Password hashes (bcrypt, argon2, scrypt, pbkdf2, crypt) and *_hash / *_digest
+      # fields are stored verifiers, not credentials that grant access.
+      - pattern-not-regex: (?i)["']\$(2[abxy]?|argon2(id|i|d)|scrypt|pbkdf2[a-z0-9_-]*|[156]|sha(256|512)|y|7)\$
+      - pattern-not-regex: (?i)[a-z0-9_]*(hash|hashed|digest)["']?\s*[:=]\s*["']
     paths:
       exclude: ["*.lock", "package-lock.json", "*.md", "*.test.*", "*.spec.*", "__tests__/", "*.snap"]
     metadata:

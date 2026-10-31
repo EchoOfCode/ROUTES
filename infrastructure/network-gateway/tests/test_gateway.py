@@ -218,10 +218,10 @@ def test_session_byte_limit():
 # ---------------------------------------------------------------- GitHub import
 
 
-def _import_session(store, token="ghp_secret_token_value_1234567890"):
+def _import_session(store, token="ghp_secret_token_value_1234567890", ref="main"):
     return store.create(mode="github_import", allowed_hosts=frozenset(), allowed_ports=frozenset({443}),
                         subnet=ipaddress.ip_network("127.0.0.0/8"), expires_at=time.time() + 60,
-                        max_bytes=10_000_000, github=GithubImport(owner="acme", repo="app", ref="main", token=token))
+                        max_bytes=10_000_000, github=GithubImport(owner="acme", repo="app", ref=ref, token=token))
 
 
 def _github_harness(routes):
@@ -233,7 +233,6 @@ def _github_harness(routes):
             resolver=make_resolver({"api.github.com": [PUBLIC], "codeload.github.com": ["140.82.112.10"]}),
             opener=make_opener(up_port, seen), scheme_port=("http", 80),
         )
-        fetcher.base_url = "http://api.github.com"
         store = SessionStore()
         proxy = ProxyServer(store, resolver=make_resolver({}), opener=make_opener(up_port, []), github_fetch=fetcher)
         px_server, px_port = await _start(proxy.handle)
@@ -283,6 +282,59 @@ def test_github_import_not_found_message():
         s = _import_session(store)
         out = await _request(port, f"GET /import HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
         assert out.startswith(b"HTTP/1.1 404") and b"not found" in out
+    run(go())
+
+
+def test_public_import_uses_archive_host_without_api_call():
+    routes = {"/acme/app/tar.gz/HEAD": (200, {}, b"PUBLIC-TARBALL")}
+
+    async def go():
+        upstream, store, seen, port = await _github_harness(routes)()
+        s = _import_session(store, token=None, ref=None)
+        out = await _request(port, f"GET /import HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        assert out.startswith(b"HTTP/1.1 200") and b"PUBLIC-TARBALL" in out
+        (req,) = upstream.requests  # exactly one request, to the archive host
+        assert req.startswith(b"GET /acme/app/tar.gz/HEAD ") and b"Host: codeload.github.com" in req
+        assert b"Authorization" not in req
+        assert seen[0][0] == ("140.82.112.10",)
+    run(go())
+
+
+def test_public_import_not_found_suggests_private_connection():
+    routes = {"/acme/app/tar.gz/main": (404, {}, b"")}
+
+    async def go():
+        _, store, _, port = await _github_harness(routes)()
+        s = _import_session(store, token=None)
+        out = await _request(port, f"GET /import HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        assert out.startswith(b"HTTP/1.1 404") and b"private repository with a token" in out
+    run(go())
+
+
+@pytest.mark.parametrize("status,headers", [
+    (403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1793450612"}),
+    (429, {"Retry-After": "120"}),
+])
+def test_rate_limit_reported_separately_from_permission_errors(status, headers):
+    routes = {"/repos/acme/app/tarball/main": (status, headers, b"{}")}
+
+    async def go():
+        _, store, _, port = await _github_harness(routes)()
+        s = _import_session(store)
+        out = await _request(port, f"GET /import HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        assert out.startswith(b"HTTP/1.1 429") and b"rate limit" in out and b"permission" not in out
+        assert s.events[-1]["reason"] == "import_rate_limited"
+    run(go())
+
+
+def test_permission_error_without_rate_limit_headers():
+    routes = {"/repos/acme/app/tarball/main": (403, {"X-RateLimit-Remaining": "4999"}, b"{}")}
+
+    async def go():
+        _, store, _, port = await _github_harness(routes)()
+        s = _import_session(store)
+        out = await _request(port, f"GET /import HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        assert out.startswith(b"HTTP/1.1 403") and b"Contents: Read-only" in out
     run(go())
 
 

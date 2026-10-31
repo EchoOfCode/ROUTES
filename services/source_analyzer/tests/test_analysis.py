@@ -139,6 +139,12 @@ def test_secrets_are_redacted_everywhere(nextjs):
     assert "AKIA…[redacted]" in secret["evidence_summary"]
 
 
+def test_password_hashes_are_not_reported_as_secrets(nextjs):
+    seed = [f for f in nextjs["findings"] if f["file"] == "lib/seed.js"]
+    assert [(f["rule_id"], f["line"]) for f in seed] == [("routes.secrets.generic-assignment", 8)]
+    assert "Winter2024Launch!" not in json.dumps(nextjs)
+
+
 def test_repository_matching(nextjs):
     matching = [e for e in nextjs["match_evidence"] if e["matches_target"]]
     kinds = {e["kind"] for e in matching}

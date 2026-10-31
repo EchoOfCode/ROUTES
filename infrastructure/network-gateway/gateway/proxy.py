@@ -122,7 +122,7 @@ def _split_authority(authority: str, default_port: int) -> tuple[str, int]:
 
 async def _write_error(writer: asyncio.StreamWriter, status: int, reason: str, message: str, extra: str = "") -> None:
     phrase = {400: "Bad Request", 403: "Forbidden", 405: "Method Not Allowed", 407: "Proxy Authentication Required",
-              409: "Conflict", 413: "Payload Too Large", 502: "Bad Gateway", 504: "Gateway Timeout",
+              409: "Conflict", 413: "Payload Too Large", 429: "Too Many Requests", 502: "Bad Gateway", 504: "Gateway Timeout",
               404: "Not Found"}.get(status, "Error")
     body = (message + "\n").encode()
     head = (

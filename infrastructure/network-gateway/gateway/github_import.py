@@ -2,15 +2,22 @@
 
 The analyzer sandbox never receives the developer's access token and has no
 general egress. It asks the gateway for ``GET /import``; the gateway fetches
-the repository tarball from api.github.com (following a redirect only to
-codeload.github.com), applies the same address validation as web traffic,
+the repository archive, applies the same address validation as web traffic,
 streams the archive back with a hard size cap, and wipes the token.
+
+* Private repositories (token present): ``api.github.com/repos/{o}/{r}/tarball``
+  with the token, following a redirect only to codeload.github.com (without
+  the token).
+* Public repositories (no token): ``codeload.github.com/{o}/{r}/tar.gz/{ref}``
+  directly. This avoids GitHub's unauthenticated REST API limit (60 requests
+  per hour per IP), which the archive host does not count against.
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
+import time
 from urllib.parse import quote, urljoin, urlsplit
 
 import h11
@@ -27,23 +34,35 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 _REF_RE = re.compile(r"^[A-Za-z0-9._/-]{1,255}$")
 
 
-def build_url(owner: str, repo: str, ref: str | None) -> str:
+def build_url(owner: str, repo: str, ref: str | None, *, authenticated: bool, scheme: str = "https") -> str:
     if not _NAME_RE.match(owner) or not _NAME_RE.match(repo) or (ref and (not _REF_RE.match(ref) or ".." in ref)):
         raise ProxyError(400, "invalid_repository", "Invalid repository reference.")
-    url = f"https://api.github.com/repos/{owner}/{repo}/tarball"
+    if not authenticated:
+        return f"{scheme}://codeload.github.com/{owner}/{repo}/tar.gz/{quote(ref, safe='/') if ref else 'HEAD'}"
+    url = f"{scheme}://api.github.com/repos/{owner}/{repo}/tarball"
     if ref:
         url += "/" + quote(ref, safe="")
     return url
 
 
+def _rate_limit_message(headers: dict[str, str]) -> str:
+    when = ""
+    reset = headers.get("x-ratelimit-reset", "")
+    if reset.isdigit():
+        when = " It resets at " + time.strftime("%H:%M UTC", time.gmtime(int(reset))) + "."
+    elif headers.get("retry-after", "").isdigit():
+        when = f" Try again in about {max(1, int(headers['retry-after']) // 60)} minute(s)."
+    return ("GitHub's rate limit for this network has been reached." + when +
+            " Try again later, connect the repository with a token, or upload a ZIP.")
+
+
 class GithubFetcher:
     def __init__(self, *, resolver=system_resolve, opener=default_open, scheme_port: tuple[str, int] = ("https", 443),
-                 allowed_hosts: frozenset[str] = ALLOWED_HOSTS, base_url: str | None = None):
+                 allowed_hosts: frozenset[str] = ALLOWED_HOSTS):
         self.resolver = resolver
         self.opener = opener
-        self.scheme, self.port = scheme_port
+        self.scheme, self.port = scheme_port  # http/80 only in tests
         self.allowed_hosts = allowed_hosts
-        self.base_url = base_url  # test hook
 
     async def __call__(self, session: Session, writer: asyncio.StreamWriter) -> None:
         gh = session.github
@@ -52,9 +71,7 @@ class GithubFetcher:
             raise ProxyError(409, "import_already_used", "This import session has already been used.")
         gh.used = True
         token, gh.token = gh.token, None  # single use: removed from session state immediately
-        url = build_url(gh.owner, gh.repo, gh.ref)
-        if self.base_url:
-            url = self.base_url + urlsplit(url).path
+        url = build_url(gh.owner, gh.repo, gh.ref, authenticated=bool(token), scheme=self.scheme)
         try:
             await self._fetch(session, writer, url, token)
         finally:
@@ -94,8 +111,9 @@ class GithubFetcher:
                 if not isinstance(response, h11.Response):
                     raise ProxyError(502, "import_bad_response", "Unexpected response from GitHub.")
                 status = response.status_code
+                rh = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in response.headers}
                 if status in (301, 302, 303, 307, 308):
-                    location = dict((k.decode().lower(), v.decode()) for k, v in response.headers).get("location")
+                    location = rh.get("location")
                     if not location:
                         raise ProxyError(502, "import_bad_redirect", "GitHub returned an invalid redirect.")
                     url = urljoin(url, location)
@@ -103,13 +121,20 @@ class GithubFetcher:
                 if status == 200:
                     await self._stream(session, conn, reader, client)
                     return
+                if status == 429 or (status == 403 and rh.get("x-ratelimit-remaining") == "0"):
+                    session.record(decision="deny", reason="import_rate_limited", host=host, status=status)
+                    raise ProxyError(429, "import_rate_limited", _rate_limit_message(rh))
                 if status in (401, 403):
                     raise ProxyError(403, "import_forbidden",
-                                     "GitHub refused access. Check the token's read permission for this repository, "
-                                     "or GitHub's rate limit.")
+                                     "GitHub refused access. Check that the token is valid and has "
+                                     "Contents: Read-only permission for this repository.")
                 if status == 404:
+                    if token:
+                        raise ProxyError(404, "import_not_found",
+                                         "The repository or reference was not found, or the token cannot access it.")
                     raise ProxyError(404, "import_not_found",
-                                     "The repository or reference was not found, or the token cannot access it.")
+                                     "The repository or reference was not found. If the repository is private, "
+                                     "connect it as a private repository with a token.")
                 raise ProxyError(502, "import_upstream_error", f"GitHub responded with status {status}.")
             finally:
                 up.close()

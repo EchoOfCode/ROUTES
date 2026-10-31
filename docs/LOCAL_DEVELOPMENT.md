@@ -93,6 +93,7 @@ API_INTERNAL_URL=http://127.0.0.1:8000 bun run dev    # http://localhost:3000 (s
 | "The website could not be reached: … gateway refused" | DNS failed, the site resolves to a private/internal address, or the port is not 80/443/8080/8443. For the local sample site, set `GATEWAY_DEV_ALLOW_HOSTS=sample-site`. |
 | Assessment stuck in *Queued* | Workers are not running: `docker compose ps`, `docker compose logs worker-discovery`. |
 | "The sandbox could not be started (… denied …)" | The Docker proxy refused a request. Check `docker compose logs docker-proxy`; Docker Engine < 26 lacks volume subpath support (ZIP uploads). |
+| "GitHub's rate limit for this network has been reached" | GitHub limits requests per IP address. Public imports avoid the API, but private imports use your token's limit (5,000/hour). Wait until the reset time shown, or upload a ZIP. |
 | Private repository import fails with 403/404 | The token needs *Contents: Read-only* on that repository; fine-grained tokens must be approved by organisations that require it. Tokens are not stored; supply it again. |
 | Source analysis "unsupported" | Detailed analysis covers Next.js + pg only. Other stacks get a profile and general rules. |
 | Everything was interrupted by a restart | Expected: the `migrate` service marks interrupted assessments as failed on startup. Run a new assessment. |
