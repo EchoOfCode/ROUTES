@@ -70,6 +70,72 @@ part of that run: `test_redact_for_llm_planted_secrets_corpus_zero_leaks`.
   minified code); that's an inherent tradeoff of this heuristic, not unique
   to this implementation.
 
+## S3 — VulnClass plugin interface
+
+**Branch:** `feat/remediation-s3-vulnclass` (off `feat/remediation-loop`, which
+now includes S1+S2)
+**Last commit:** not yet committed — pending review
+**Status: DONE** (detect() only - see below)
+
+### Files changed
+- `services/source_analyzer/vuln_classes/base.py` (new) — `VulnClass` ABC
+  (`detect`, `build_snapshot`, `build_testbench`, `exploit_assertions`,
+  `benign_assertions`, `fix_constraints`), `AnalysisContext`, and placeholder
+  `Snapshot`/`Testbench`/`Assertion`/`FixConstraints` dataclasses.
+- `services/source_analyzer/vuln_classes/sqli_plugin.py` (new) — `SqliVulnClass`,
+  a thin wrapper around the **unchanged** `SqliAnalyzer`/`sqli_finding`/
+  `sqli_inconclusive`.
+- `services/source_analyzer/vuln_classes/xss_plugin.py` (new) — `XssVulnClass`,
+  same treatment for the **unchanged** `XssAnalyzer`/`xss_dom_sink_finding`/
+  `xss_reflected_finding`.
+- `services/source_analyzer/vuln_classes/__init__.py` (new) — the
+  `VULN_CLASSES` registry (`[SqliVulnClass(), XssVulnClass()]`, order matters,
+  see below).
+- `services/source_analyzer/main.py` — replaced the hardcoded
+  `SqliAnalyzer`/`XssAnalyzer` block with: build one `AnalysisContext`, loop
+  over `VULN_CLASSES`, call `.detect(ctx)`. `result["routes"]`/
+  `db_interactions`/`input_sources` still come from the ran `SqliAnalyzer`
+  instance (now reached via `ctx.sqli_analyzer`), exactly as before.
+- `services/source_analyzer/tests/test_vuln_classes.py` (new) — registry
+  shape, interface conformance, and that every unimplemented stage raises
+  `NotImplementedError` rather than returning fake data.
+
+### A real architectural wart, inherited not introduced
+
+`XssVulnClass.detect()` does not parse its own files — it reads
+`ctx.sqli_analyzer.modules`/`.routes`, which only exist after
+`SqliVulnClass.detect()` has run. This is **not new**: `main.py` had this
+exact coupling before S3 (it built `module_functions` from the SQLi
+analyzer's parsed output and passed it into `XssAnalyzer` directly). "No
+behavior change" meant preserving it rather than fixing it by having XSS
+re-parse everything independently. `VULN_CLASSES`'s list order encodes the
+dependency (sqli first); if a third vuln class is added that relies on
+request/route data, it needs to go after sqli in that list, or this needs
+revisiting. `XssVulnClass.detect()` raises `RuntimeError` (not silently
+wrong output) if called with `ctx.sqli_analyzer` still `None`.
+
+### Acceptance (raw output)
+
+```
+$ docker run --rm --user 10001:10001 --read-only --tmpfs /tmp:uid=10001,gid=10001 \
+    --tmpfs /home/sandbox:uid=10001,gid=10001 --tmpfs /work:uid=10001,gid=10001 \
+    -w /srv routes/analyzer:local python -m pytest -q source_analyzer/tests
+.....................................                                    [100%]
+37 passed, 1 warning in 6.49s
+```
+37 = the same 34 tests from M1 (unchanged, in `test_analysis.py` — this is the
+actual "no behavior change" proof) + 3 new tests in `test_vuln_classes.py`.
+
+### Not working / stubbed / assumed
+
+- `build_snapshot`, `build_testbench`, `exploit_assertions`,
+  `benign_assertions`, `fix_constraints` are **interface shape only** — every
+  implementation raises `NotImplementedError`. They become real in S4
+  (snapshot), S7 (testbench), and S6 (fix validation).
+- `Snapshot`/`Testbench`/`Assertion`/`FixConstraints` dataclass fields are my
+  best guess at what S4/S6/S7 will need, not finalized — expect them to grow
+  or change shape when those steps are actually implemented.
+
 ## S1 — migration 0004, LLM A/B config, remove Ollama
 
 **Branch:** `feat/remediation-s1-config` (off `feat/remediation-loop`)
