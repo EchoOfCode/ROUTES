@@ -19,7 +19,9 @@ Every discovery or source run is a fresh container created by the Sandbox Manage
 | Network | per-run `internal` network shared only with the gateway, or no network (ZIP) |
 | Cleanup | container, network and gateway session removed in `finally`; orphans removed when the manager starts |
 
-Repository code is never executed: there is no `npm install`, build or lifecycle script. The analyzer reads files with tree-sitter and Semgrep only.
+Discovery and source analysis never execute repository code: there is no `npm install`, build or lifecycle script. The analyzer reads files with tree-sitter and Semgrep only.
+
+**Build-and-run sandboxes** (`routes verify`, run kind `build_run`) are the one place where a developer's application is executed. They use the same controls plus three containers on private per-run networks, registry-only egress that is removed before any repository code runs, and a fail-closed isolation self-check. See [BUILD_RUN.md](BUILD_RUN.md) for the lifecycle, the documented exceptions (executable `/work`, larger memory caps for the build runner only) and limitations.
 
 Chromium runs with `--no-sandbox` because its namespace sandbox needs privileges the container deliberately lacks; the container is the isolation boundary.
 
@@ -45,10 +47,11 @@ The worker has no Docker access. The Sandbox Manager reaches Docker only through
 
 - **Allowed:** ping/version, inspect of allow-listed images, container create/start/wait/kill/stop/logs (non-follow)/inspect/delete, and network create/inspect/connect/disconnect/delete. Lists are forcibly filtered to `routes.sandbox=true`.
 - **Container create is validated field by field:** allow-listed image, `routes-sbx-` name, sandbox label, non-root user and group, `CapDrop: ALL`, `no-new-privileges`, read-only rootfs, memory/CPU/PID limits within caps, no swap. Refused: privileged mode, bind mounts, devices, host PID/IPC/UTS/user namespaces, `CapAdd`, sysctls, port publishing, unconfined seccomp/AppArmor, custom runtimes, `MaskedPaths` overrides, and executable tmpfs. Volume mounts are allowed only for the uploads volume, read-only, at `/input`, with a UUID subpath.
-- Operations on existing containers and networks require the sandbox label (checked by inspecting first). Network connect is limited to sandbox containers or the gateway.
+- Operations on existing containers and networks require the sandbox label (checked by inspecting first). Network connect is limited to sandbox containers **of the same run** (`routes.run` label must match) or the gateway, and the gateway may join only networks labelled `routes.gateway=allowed` (created for egress). Disconnecting is always allowed so cleanup cannot be blocked.
+- `HostConfig.Tmpfs` must stay `noexec`, except `/work` for images listed in `BUILD_IMAGES` (the build runner), never with `suid`/`dev`. The `Mounts` form of tmpfs may carry only size and mode, so raw mount options cannot be smuggled in.
 - Everything else (exec, attach, archive, build, image pull, volumes, swarm, plugins, `/info`) returns 403.
 
-Tests: `infrastructure/docker-proxy/tests` (60 cases) and `scripts/e2e.py` (live probe).
+Tests: `infrastructure/docker-proxy/tests` (74 cases), `scripts/e2e.py` and `scripts/build_run_e2e.py` (live probes).
 
 ## Controlled network gateway (`infrastructure/network-gateway`)
 
@@ -57,6 +60,7 @@ Sandbox networks are created with `internal: true`, so a sandbox has **no route*
 For each run the manager opens a session bound to (a) a random token, (b) the run network's subnet and (c) a mode:
 
 - **web** (discovery): only the exact submitted hostname; ports 80/443 (+8080/8443 if submitted); only `CONNECT` and absolute-form `GET/HEAD`; no request bodies.
+- **packages** (build-run dependency install): `CONNECT` to `registry.npmjs.org:443` only. The gateway fixes the hosts, not the caller. Plain HTTP is refused, a byte cap applies, and there is optionally one `GET /import`. The session is closed and the gateway detached before any repository code runs.
 - **github_import** (source): only `GET /import`. The gateway itself fetches the archive, with a 100 MB cap. Private repositories: `api.github.com` with the token, following a redirect only to `codeload.github.com` (without the token). Public repositories: `codeload.github.com` directly, so imports do not use GitHub's unauthenticated API limit of 60 requests per hour.
 
 For every connection the gateway resolves DNS itself, rejects the destination if **any** resolved address is loopback, private (RFC 1918 / ULA), link-local (including `169.254.169.254` and `fd00:ec2::254`), CGNAT, multicast, reserved, NAT64/6to4/Teredo-wrapped internal, or unspecified, and then connects to the **validated IP** (no second lookup). This prevents DNS rebinding. Each redirect is a new request and is validated again. Per-session byte limits and idle and lifetime timeouts apply. Allowed and denied destinations are logged per session and summarised on the assessment.
@@ -88,5 +92,6 @@ Only `web` (and `api`, for scripts) are published, on 127.0.0.1. Security header
 - **Ownership** is a manual confirmation, not verified proof.
 - **Cookies are not port-isolated by browsers:** other applications on `localhost` can read the `routes_csrf` cookie. The Origin allow-list remains the effective CSRF defence; do not add origins of other local applications to `ALLOWED_ORIGINS`.
 - **Docker Desktop:** isolation relies on Docker's `internal` networks inside the Desktop VM, which behaves like Linux Docker. Rootless Docker or alternative runtimes have not been tested.
-- **Not dynamically verified:** findings are static evidence; there is no exploit confirmation in Phase 1.
+- **Not dynamically verified:** assessment findings are static evidence. Build-and-run results describe what the supplied test plan observed in a disposable copy; they are evidence, not proof of security.
+- **Bridge address on internal networks:** the host-side bridge address of a per-run network still answers at the IP level (connections are refused). The build runner probes common ports there and fails closed if any accepts a connection; other ports are not checked. See [BUILD_RUN.md](BUILD_RUN.md).
 - **CLI port:** the `cli` network is not `internal`, which is what makes publishing to 127.0.0.1 possible. As a result, the Sandbox Manager (ROUTES' own code, not a sandbox) has an outbound route. Other local processes running as your user can reach the port but need the token. Keep the engine env file private.

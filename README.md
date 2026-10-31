@@ -68,7 +68,7 @@ Discovery and source analysis run in disposable containers that are non-root and
 - it blocks private, loopback, link-local and metadata addresses;
 - it keeps traffic to the exact submitted hostname.
 
-Repository code is never executed. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SECURITY.md](docs/SECURITY.md).
+Assessments never execute repository code. `routes verify` is separate: it builds, runs and tests an application inside a disposable three-container environment. Its egress is limited to the npm registry during install and removed before any repository code runs. See [docs/BUILD_RUN.md](docs/BUILD_RUN.md). Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Documentation
 
@@ -78,6 +78,7 @@ Repository code is never executed. Details: [docs/ARCHITECTURE.md](docs/ARCHITEC
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Engine, sandboxes, networks, assessment lifecycle |
 | [PHASE_1_SCOPE.md](docs/PHASE_1_SCOPE.md) | What is and is not included, supported stacks |
 | [SECURITY.md](docs/SECURITY.md) | Isolation, secrets handling, known limitations |
+| [BUILD_RUN.md](docs/BUILD_RUN.md) | Build-and-run sandboxes: lifecycle, test plans, results, security boundaries |
 | [LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md) | Tests, environment variables, troubleshooting |
 | [DATABASE.md](docs/DATABASE.md), [API.md](docs/API.md) | Legacy web stack: PostgreSQL schema and REST API |
 
@@ -90,9 +91,11 @@ packages/core            Engine client, run supervision, result mapping, status/
 packages/storage         ~/.routes layout, config, SQLite models and repository
 services/discovery       Sandbox: HTTP crawler, Playwright renderer, endpoint and technology detection
 services/source_analyzer Sandbox: safe extraction, profiling, tree-sitter, Semgrep, data-flow engine
-services/sandbox_manager Orchestrates disposable containers through the Docker proxy
+services/sandbox_manager Orchestrates disposable containers through the Docker proxy (incl. build-runs)
+services/build_runner    Sandbox: fixed-entrypoint install/build/start of a Next.js app (+ synthetic fixture)
+services/test_runner     Sandbox: executes a declarative test plan against one application
 infrastructure/          Dockerfiles, Docker API proxy, network gateway
 apps/web, services/api,  Legacy browser stack (Compose profile `web`), kept during the migration
   services/worker
-scripts/                 cli_e2e.py (CLI end-to-end), e2e.py (web stack), init-env
+scripts/                 cli_e2e.py (CLI end-to-end), build_run_e2e.py (build-run scenarios), e2e.py (web stack), init-env
 ```

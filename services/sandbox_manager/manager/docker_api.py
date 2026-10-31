@@ -41,9 +41,13 @@ class DockerAPI:
         return r.status_code == 200
 
     # networks
-    async def create_network(self, name: str, run_id: str) -> str:
+    async def create_network(self, name: str, run_id: str, *, egress: bool = True) -> str:
+        """Internal network for one run. Only ``egress`` networks may be joined by the gateway."""
+        labels = {"routes.sandbox": "true", "routes.run": run_id}
+        if egress:
+            labels["routes.gateway"] = "allowed"
         body = {"Name": name, "Driver": "bridge", "Internal": True, "EnableIPv6": False, "CheckDuplicate": True,
-                "Labels": {"routes.sandbox": "true", "routes.run": run_id},
+                "Labels": labels,
                 "Options": {"com.docker.network.bridge.enable_icc": "true"}}
         r = await self._call("POST", "/networks/create", json=body)
         return r.json()["Id"]
@@ -74,6 +78,9 @@ class DockerAPI:
 
     async def inspect(self, cid: str) -> dict:
         return (await self._call("GET", f"/containers/{cid}/json")).json()
+
+    async def stop(self, cid: str, timeout: int = 15) -> None:
+        await self._call("POST", f"/containers/{cid}/stop", params={"t": str(timeout)}, ok=(204, 304, 404))
 
     async def kill(self, cid: str) -> None:
         await self._call("POST", f"/containers/{cid}/kill", ok=(204, 404, 409))

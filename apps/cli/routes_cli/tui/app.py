@@ -28,11 +28,12 @@ from routes_cli.renderers.theme import ASCII, THEME, UNICODE
 from routes_cli.service import AssessmentFinished, AssessmentRunner, PlanError, set_match
 from routes_cli.tui.commands import COMMANDS, Command, CommandError, parse
 from routes_cli.tui.modals import ConfirmModal, MatchModal, TokenModal
-from routes_cli.tui.widgets import AssessmentPanel, Logo, Menu, PromptInput, Readiness, fade_in
+from routes_cli.tui.widgets import AssessmentPanel, BuildRunPanel, Logo, Menu, PromptInput, Readiness, fade_in
 
 MENU = [
     ("scan", "Scan a website", "/scan "),
     ("analyze", "Analyse a repository or folder", "/analyze "),
+    ("verify", "Build, run and test an app (sandbox)", "/verify "),
     ("findings", "View latest findings", "/findings"),
     ("history", "View assessment history", "/history"),
     ("projects", "Projects", "/projects"),
@@ -42,6 +43,8 @@ MENU = [
 HINTS = {
     "home": "↑↓ menu · type a command · Tab completes · ↑ history · /help · Ctrl+C twice to exit",
     "running": "Assessment running · Ctrl+C cancels it (the sandbox is stopped and removed)",
+    "verifying": "Build-and-run in progress · Ctrl+C cancels it (all three containers and networks are removed)",
+    "verified": "/verify again · /home · Esc back to prompt",
     "results": "↑↓ select a finding · Enter shows details · /report html · /history · Esc back to prompt",
     "default": "Type a command · Tab completes · ↑ history · /help · /home",
 }
@@ -71,6 +74,7 @@ class RoutesApp(App):
         self.model: ProgressModel | None = None
         self.last_interrupt = 0.0
         self.view_name = "home"
+        self.run_kind = "assessment"                      # what Ctrl+C would cancel: "assessment" | "verify"
         self._findings: list = []
         self.console.push_theme(THEME)
 
@@ -164,8 +168,10 @@ class RoutesApp(App):
             self.prompt.value = entry[2]
             self.prompt.cursor_position = len(entry[2])
             self.prompt.focus()
-            self.query_one("#hint", Static).update("Enter a website URL (scan) or a GitHub URL, folder or .zip "
-                                                   "(analyse), then press Enter")
+            hint = ("Enter a GitHub URL, folder or .zip, then --tests <plan.json> [--patch <fix.diff>]"
+                    if event.key == "verify" else
+                    "Enter a website URL (scan) or a GitHub URL, folder or .zip (analyse), then press Enter")
+            self.query_one("#hint", Static).update(hint)
         else:
             self.execute(entry[2])
 
@@ -228,10 +234,18 @@ class RoutesApp(App):
 
     @work
     async def confirm_cancel(self) -> None:
-        ok = await self.push_screen_wait(ConfirmModal(
-            "Cancel the running assessment?",
-            "ROUTES will stop the sandbox, remove its container and network, and record the assessment as "
-            "cancelled. Results gathered so far are not kept.", yes="Cancel assessment", no="Keep running"))
+        if self.run_kind == "verify":
+            modal = ConfirmModal(
+                "Cancel the build-and-run?",
+                "ROUTES will stop the application, database and test runner, remove their containers and networks, "
+                "and delete the staged source. The result will be reported as cancelled (inconclusive).",
+                yes="Cancel run", no="Keep running")
+        else:
+            modal = ConfirmModal(
+                "Cancel the running assessment?",
+                "ROUTES will stop the sandbox, remove its container and network, and record the assessment as "
+                "cancelled. Results gathered so far are not kept.", yes="Cancel assessment", no="Keep running")
+        ok = await self.push_screen_wait(modal)
         if ok and self.running is not None:
             self.running.set()
             self.notify("Cancelling: waiting for the engine to stop and remove the sandbox.")
@@ -251,7 +265,9 @@ class RoutesApp(App):
         self.set_view("help", Static("Commands", classes="section-title"), Static(t),
                       Static("Keys", classes="section-title"), Static(keys),
                       Static(Text("Website scans read up to 25 public pages on the exact hostname, using GET "
-                                  "requests only. Source analysis is static: repository code is never run.",
+                                  "requests only. Source analysis is static: repository code is never run. "
+                                  "/verify is the exception: it builds and runs the application inside a "
+                                  "disposable, network-isolated sandbox (docs/BUILD_RUN.md).",
                                   style="#8a8f98")))
 
     def cmd_clear(self, cmd: Command) -> None:
@@ -281,6 +297,128 @@ class RoutesApp(App):
         req = actions.Request(url=cmd.options.get("--url"), source=cmd.args[0], ref=cmd.options.get("--ref"),
                               private="--private" in cmd.flags, project=cmd.options.get("--project"))
         self.start_assessment(req)
+
+    # ------------------------------------------------------------ build & run
+    def cmd_verify(self, cmd: Command) -> None:
+        if not cmd.args or "--tests" not in cmd.options:
+            self.notify("Usage: /verify <github-url|folder|zip> --tests <plan.json> [--patch <fix.diff>]",
+                        severity="warning")
+            return
+        self.start_verify(cmd)
+
+    @work(exclusive=True, group="assessment")
+    async def start_verify(self, cmd: Command) -> None:
+        import json as _json
+
+        from routes_core.buildrun import BuildRunInvalid, BuildRunRequest
+        from routes_core.sources import SourceError, classify
+
+        if self.running is not None and not self.running.is_set():
+            self.notify("Something is already running. Wait for it or cancel it (Ctrl+C).", severity="warning")
+            return
+        try:
+            spec = classify(cmd.args[0], ref=cmd.options.get("--ref"))
+            plan = _json.loads(Path(cmd.options["--tests"]).expanduser().read_text("utf-8"))
+            patch = Path(cmd.options["--patch"]).expanduser().read_text("utf-8") if "--patch" in cmd.options else None
+            approved = [x.strip() for x in cmd.options.get("--approve", "").split(",") if x.strip()]
+            req = BuildRunRequest(source=spec, test_plan=plan, patch=patch, approved_scripts=approved,
+                                  requested_by="routes-tui")
+            req.validate()
+        except SourceError as exc:
+            self.notify(str(exc), severity="error", title="Cannot start")
+            return
+        except (OSError, ValueError) as exc:
+            msg = str(exc) if isinstance(exc, BuildRunInvalid) else f"Could not read the test plan or patch: {exc}"
+            self.notify(msg, severity="error", title="Cannot start")
+            return
+        body = (f"[b]{escape(spec.label)}[/b]\n\nROUTES will install its dependencies (npm registry only, install "
+                "scripts off), build and start it inside disposable containers with no network access after "
+                "installation, then run your test plan against it. The repository's own code runs inside the "
+                "sandbox, so only use projects you own or trust. Your files are never modified"
+                + (", and the patch is applied to a temporary copy only." if patch else "."))
+        ok = await self.push_screen_wait(ConfirmModal("Run this application in a sandbox?", body,
+                                                      yes="Build and run", no="Cancel"))
+        if not ok:
+            self.notify("Not started.")
+            return
+        if "--private" in cmd.flags:
+            if not spec.is_github:
+                self.notify("--private applies to GitHub repositories only.", severity="warning")
+                return
+            token = await self.push_screen_wait(TokenModal(spec.label))
+            if not token:
+                self.notify("Not started: no token was entered.")
+                return
+            req.token, token = token.strip(), None
+        self.run_verify(req)
+
+    def run_verify(self, req) -> None:
+        self.running = threading.Event()
+        self.run_kind = "verify"
+        panel = BuildRunPanel(self.g, animate=self.motion, source=req.source.label, id="buildrun")
+        head = Static(Text.from_markup("[b #e6e6e3]ROUTES[/] [#5c6068]/[/] [#8a8f98]BUILD & RUN[/]"),
+                      id="assessment-head")
+        self.set_view("verifying", head, panel)
+        self.prompt.focus()
+        self._verify_worker(req, self.running, panel)
+
+    @work(thread=True, exclusive=True, group="runner")
+    def _verify_worker(self, req, cancel: threading.Event, panel) -> None:
+        from routes_core.buildrun import BuildRunInvalid, submit, wait
+        from routes_core.engine import EngineRejected
+        from routes_core.sources import SourceError
+
+        client = self.ctx.engine_client()
+        final = None
+        try:
+            run = submit(client, req, cache_dir=self.ctx.home.cache,
+                         on_local=lambda m: self.call_from_thread(panel.add_local, m))
+            self.call_from_thread(panel.set_state, run)
+            final = wait(client, run, on_state=lambda st: self.call_from_thread(panel.set_state, st),
+                         should_cancel=cancel.is_set)
+        except (BuildRunInvalid, SourceError) as exc:
+            self.call_from_thread(self.notify, str(exc), severity="error", title="Cannot start")
+        except EngineRejected as exc:
+            self.call_from_thread(self.notify, f"The engine rejected the request: {exc}", severity="error")
+        except EngineUnavailable:
+            self.call_from_thread(self.notify, "The ROUTES engine is not reachable. Run /engine up (Docker must be "
+                                               "running).", severity="error")
+        except Exception as exc:  # noqa: BLE001
+            self.call_from_thread(self.notify, f"The build-and-run stopped unexpectedly ({type(exc).__name__}).",
+                                  severity="error")
+        finally:
+            req.token = None
+            client.close()
+        self.call_from_thread(self._verify_finished, final, panel)
+
+    def _verify_finished(self, final, panel) -> None:
+        import json as _json
+
+        from routes_cli.renderers import buildrun as BR
+
+        self.running = None
+        self.run_kind = "assessment"
+        panel.finish()
+        if final is None:
+            self.query_one("#hint", Static).update(HINTS["default"])
+            return
+        verdict = (final.get("result") or {}).get("verification", "INCONCLUSIVE")
+        saved = None
+        try:
+            out_dir = self.ctx.home.reports / "build-runs"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            saved = out_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{final.get('id', 'run')}.json"
+            saved.write_text(_json.dumps(final, indent=2), "utf-8")
+        except OSError:
+            saved = None
+        sev = {"VERIFIED_RUN": "information", "TESTS_FAILED": "warning",
+               "DYNAMIC_VERIFICATION_UNSUPPORTED": "warning"}.get(verdict, "error")
+        self.notify(f"Build-and-run finished: {verdict}", severity=sev, timeout=8)
+        title = Text.from_markup(f"[b #e6e6e3]Build & run[/]  [#5c6068]run {escape(str(final.get('id', '')))}[/]")
+        widgets = [Static(title, classes="section-title"), Static(BR.render(final, self.g))]
+        if saved is not None:
+            widgets.append(Static(Text(f"Full result saved to {saved}", style="#5c6068")))
+        self.set_view("verified", *widgets)
 
     @work(exclusive=True, group="assessment")
     async def start_assessment(self, req: actions.Request) -> None:
@@ -322,6 +460,7 @@ class RoutesApp(App):
     def run_assessment(self, prepared: actions.Prepared) -> None:
         self.model = ProgressModel()
         self.running = threading.Event()
+        self.run_kind = "assessment"
         panel = AssessmentPanel(self.model, self.g, animate=self.motion, id="progress")
         self.set_view("running", Static(Text.from_markup("[b #e6e6e3]ROUTES[/] [#5c6068]/[/] [#8a8f98]ASSESSMENT[/]"),
                                         id="assessment-head"), panel)

@@ -12,6 +12,10 @@ from dataclasses import dataclass, field
 from urllib.parse import parse_qs
 
 SANDBOX_LABEL = "routes.sandbox"
+RUN_LABEL = "routes.run"
+# Networks the network gateway may join (egress-capable). Build-run database and
+# test networks never carry it, so they stay unreachable from outside.
+GATEWAY_LABEL = "routes.gateway"
 NAME_PREFIX = "routes-sbx-"
 _VERSION_PREFIX = re.compile(r"^/v\d+\.\d+(?=/)")
 _ID = r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}"
@@ -33,6 +37,15 @@ class Limits:
     max_nano_cpus: int = 2_000_000_000
     max_pids: int = 512
     max_tmpfs_bytes: int = 1024**3
+    # Build-run images (they install, build and run a developer application).
+    # Documented exception: their /work tmpfs may be executable, because Node
+    # native add-ons (for example Next.js' SWC compiler) are loaded with dlopen,
+    # which fails on noexec mounts. Everything else (non-root, no capabilities,
+    # read-only root, no host mounts, internal networks) still applies.
+    build_images: frozenset[str] = frozenset()
+    max_build_memory: int = 4 * 1024**3
+    max_build_tmpfs_bytes: int = 3 * 1024**3
+    exec_tmpfs_path: str = "/work"
 
 
 @dataclass
@@ -94,11 +107,15 @@ def _parse_size(value: str) -> int:
     return n * {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}[m.group(2)]
 
 
-def _check_tmpfs_options(opts: str, limits: Limits) -> None:
+def _check_tmpfs_options(opts: str, limits: Limits, *, max_bytes: int | None = None, exec_ok: bool = False) -> None:
     sizes = [o.split("=", 1)[1] for o in opts.split(",") if o.startswith("size=")]
     _require(len(sizes) == 1, "tmpfs_size_required")
-    _require(_parse_size(sizes[0]) <= limits.max_tmpfs_bytes, "tmpfs_too_large")
-    _require("exec" not in [o.strip() for o in opts.split(",")], "tmpfs_exec_forbidden")
+    _require(_parse_size(sizes[0]) <= (max_bytes or limits.max_tmpfs_bytes), "tmpfs_too_large")
+    options = [o.strip() for o in opts.split(",")]
+    if exec_ok:
+        _require("suid" not in options and "dev" not in options, "tmpfs_suid_or_dev_forbidden")
+    else:
+        _require("exec" not in options, "tmpfs_exec_forbidden")
 
 
 def _check_mounts(mounts: list, limits: Limits) -> None:
@@ -106,7 +123,10 @@ def _check_mounts(mounts: list, limits: Limits) -> None:
         _require(isinstance(m, dict), "mount_invalid")
         kind = m.get("Type")
         if kind == "tmpfs":
-            size = (m.get("TmpfsOptions") or {}).get("SizeBytes") or 0
+            opts = m.get("TmpfsOptions") or {}
+            # Only size and mode; raw mount options (e.g. "exec") are refused here.
+            _require(set(opts) <= {"SizeBytes", "Mode"}, "tmpfs_options_forbidden")
+            size = opts.get("SizeBytes") or 0
             _require(0 < size <= limits.max_tmpfs_bytes, "tmpfs_size_required")
             _require(not m.get("Source"), "tmpfs_source_forbidden")
         elif kind == "volume":
@@ -167,8 +187,9 @@ def check_container_create(query: str, body: bytes, limits: Limits) -> None:
     # Overriding masked/read-only /proc paths (even with []) unmasks them.
     _require(host.get("MaskedPaths") is None and host.get("ReadonlyPaths") is None, "unmasking_forbidden")
 
+    build = spec.get("Image") in limits.build_images
     memory = host.get("Memory") or 0
-    _require(0 < memory <= limits.max_memory, "memory_limit_required")
+    _require(0 < memory <= (limits.max_build_memory if build else limits.max_memory), "memory_limit_required")
     _require(host.get("MemorySwap") in (None, 0, memory), "swap_forbidden")
     _require(0 < (host.get("NanoCpus") or 0) <= limits.max_nano_cpus, "cpu_limit_required")
     _require(0 < (host.get("PidsLimit") or 0) <= limits.max_pids, "pids_limit_required")
@@ -185,7 +206,8 @@ def check_container_create(query: str, body: bytes, limits: Limits) -> None:
 
     for path, opts in (host.get("Tmpfs") or {}).items():
         _require(isinstance(path, str) and path.startswith("/"), "tmpfs_invalid")
-        _check_tmpfs_options(opts or "", limits)
+        _check_tmpfs_options(opts or "", limits, max_bytes=limits.max_build_tmpfs_bytes if build else None,
+                             exec_ok=build and path == limits.exec_tmpfs_path)
     _check_mounts(host.get("Mounts") or [], limits)
 
 
@@ -283,13 +305,30 @@ def route(method: str, raw_path: str, query: str, body: bytes, limits: Limits) -
         return Decision("network", raw_path, query, target=m.group(1))
     if method == "POST" and (m := re.fullmatch(rf"/networks/({_ID})/(connect|disconnect)", path)):
         container = check_connect_body(body)
-        return Decision("connect", raw_path, query, target=m.group(1), container=container)
+        return Decision("connect", raw_path, query, target=m.group(1), container=container, extra={"op": m.group(2)})
     raise Denied("endpoint_forbidden")
 
 
 def is_sandbox(inspect: dict) -> bool:
     labels = (inspect.get("Config") or {}).get("Labels") or inspect.get("Labels") or {}
     return labels.get(SANDBOX_LABEL) == "true"
+
+
+def labels_of(inspect: dict) -> dict:
+    return (inspect.get("Config") or {}).get("Labels") or inspect.get("Labels") or {}
+
+
+def check_attachment(op: str, network: dict, container: dict, *, gateway: bool) -> None:
+    """A sandbox container may only join networks of its own run; the gateway may
+    only join networks created for egress. Leaving a network is always allowed."""
+    if op == "disconnect":
+        return
+    net_labels = labels_of(network)
+    if gateway:
+        _require(net_labels.get(GATEWAY_LABEL) == "allowed", "gateway_network_forbidden")
+        return
+    run = labels_of(container).get(RUN_LABEL)
+    _require(bool(run) and run == net_labels.get(RUN_LABEL), "cross_run_attachment_forbidden")
 
 
 def is_gateway(inspect: dict, gateway_name: str) -> bool:

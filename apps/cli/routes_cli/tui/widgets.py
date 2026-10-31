@@ -249,3 +249,48 @@ class Menu(Widget, can_focus=True):
 
     def on_blur(self) -> None:
         self.refresh()
+
+
+class BuildRunPanel(Static):
+    """Live build-and-run progress from real engine run states (phases, events, test counts)."""
+
+    def __init__(self, g: Glyphs, *, animate: bool, source: str, **kw):
+        super().__init__("", **kw)
+        import time
+
+        self.g = g
+        self.animate_spin = animate
+        self.source = source
+        self.state: dict | None = None
+        self.local: list[str] = []
+        self.frame = 0
+        self._clock = time.monotonic
+        self.started = self._clock()
+        self.ended: float | None = None
+
+    def on_mount(self) -> None:
+        self.set_interval(1 / 12 if self.animate_spin else 1.0, self._tick)
+        self.redraw()
+
+    def _tick(self) -> None:
+        self.frame += 1
+        self.redraw()
+
+    def add_local(self, text: str) -> None:
+        self.local.append(text)
+        self.redraw()
+
+    def set_state(self, state: dict) -> None:
+        self.state = state
+        self.redraw()
+
+    def finish(self) -> None:
+        self.ended = self._clock()
+        self.redraw()
+
+    def redraw(self) -> None:
+        from routes_cli.renderers.buildrun import progress
+
+        elapsed = (self.ended or self._clock()) - self.started
+        self.update(progress(self.state, self.g, frame=self.frame, animate=self.animate_spin and self.ended is None,
+                             local=self.local, elapsed=elapsed, source=self.source))

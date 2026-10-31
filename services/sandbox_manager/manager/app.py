@@ -12,12 +12,14 @@ import os
 import re
 import time
 import uuid
+from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
+from routes_shared.buildrun import BuildRunOptions, PatchRejected, TestPlan, validate_patch
 from routes_shared.netpolicy import UrlPolicyError, parse_target_url
 from routes_shared.uploads import MAX_UPLOAD_BYTES, UploadRejected, ZipStager, discard_upload
 
@@ -77,6 +79,38 @@ class SourceRun(BaseModel):
         return v
 
 
+class BuildRunIn(BaseModel):
+    """A candidate to build, run and test. The patch (if any) is applied to a
+    temporary copy of the snapshot inside the sandbox, never to the original."""
+
+    kind: Literal["build_run"]
+    source: Literal["github", "zip"]
+    upload_id: str | None = None
+    owner: str | None = None
+    repo: str | None = None
+    ref: str | None = None
+    credential_handle: str | None = Field(default=None, max_length=100)
+    patch: str | None = Field(default=None, max_length=1024 * 1024)
+    test_plan: TestPlan
+    options: BuildRunOptions = Field(default_factory=BuildRunOptions)
+    requested_by: str | None = Field(default=None, max_length=120, pattern=r"^[A-Za-z0-9 ._:@/-]*$")
+
+    @field_validator("upload_id")
+    @classmethod
+    def _uuid(cls, v):
+        return SourceRun._uuid(v)
+
+    @field_validator("owner", "repo")
+    @classmethod
+    def _name(cls, v):
+        return SourceRun._name(v)
+
+    @field_validator("ref")
+    @classmethod
+    def _ref(cls, v):
+        return SourceRun._ref(v)
+
+
 class CredentialIn(BaseModel):
     secret: str = Field(min_length=10, max_length=400)
     scope: str = Field(max_length=220)
@@ -96,6 +130,14 @@ def build_app(settings: Settings | None = None, *, docker: DockerAPI | None = No
     async def lifespan(_: FastAPI):
         removed = await runs.cleanup_orphans()
         log.info("startup cleanup removed %d orphaned sandbox object(s)", removed)
+        # Uploads younger than the claim window survive a restart unclaimed; track them
+        # so they still expire (no run from before the restart can claim them).
+        for entry in Path(settings.uploads_dir).glob("*"):
+            try:
+                uuid.UUID(entry.name)
+                pending_uploads.setdefault(entry.name, entry.stat().st_mtime)
+            except (ValueError, OSError):
+                continue
         yield
         for run in runs.runs.values():
             run.cancel.set()
@@ -172,11 +214,37 @@ def build_app(settings: Settings | None = None, *, docker: DockerAPI | None = No
                 if spec.upload_id:
                     pending_uploads.pop(spec.upload_id, None)  # the run now owns (and deletes) it
                 run = runs.start("source", {**spec.model_dump(), "target_host": host})
+            elif kind == "build_run":
+                spec = BuildRunIn.model_validate(body)
+                if spec.source == "zip" and not spec.upload_id:
+                    raise ValueError("upload_id required")
+                if spec.source == "github" and not (spec.owner and spec.repo):
+                    raise ValueError("owner and repo required")
+                if spec.source == "zip" and spec.upload_id not in pending_uploads:
+                    raise ValueError("unknown or expired upload_id")
+                if spec.patch is not None:
+                    validate_patch(spec.patch)
+                if spec.upload_id:
+                    pending_uploads.pop(spec.upload_id, None)
+                data = spec.model_dump(by_alias=True)
+                data["test_plan"] = spec.test_plan.model_dump(by_alias=True)
+                run = runs.start("build_run", data)
             else:
                 raise ValueError("unknown run kind")
+        except PatchRejected as exc:
+            reject_upload(body)
+            raise HTTPException(status_code=422, detail=f"patch rejected: {exc}") from exc
         except (ValueError, UrlPolicyError) as exc:
+            reject_upload(body)
             raise HTTPException(status_code=422, detail=str(exc)[:300]) from exc
         return run.public()
+
+    def reject_upload(body: dict) -> None:
+        """A rejected request never leaves its staged snapshot behind."""
+        upload_id = body.get("upload_id") if isinstance(body, dict) else None
+        if isinstance(upload_id, str) and upload_id in pending_uploads:
+            pending_uploads.pop(upload_id, None)
+            discard_upload(settings.uploads_dir, upload_id)
 
     @app.get("/runs/{run_id}", dependencies=[Depends(require_token)])
     async def get_run(run_id: str):

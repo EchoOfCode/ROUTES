@@ -50,6 +50,7 @@ The prompt at the bottom is always available. Commands may be typed with or with
 |---|---|
 | `/scan <url> [--source <repo/folder/zip>] [--project <name>]` | Website discovery, optionally with source analysis |
 | `/analyze <github-url/folder/zip> [--url <site>] [--ref <branch>] [--private]` | Static source analysis |
+| `/verify <github-url/folder/zip> --tests <plan.json> [--patch <fix.diff>] [--ref <branch>] [--approve <pkg,...>] [--private]` | Build, run and test the app in a disposable sandbox ([BUILD_RUN.md](BUILD_RUN.md)). Asks for confirmation first, shows each phase live as the engine enters it, Ctrl+C cancels, and the full result is saved under `~/.routes/reports/build-runs/` |
 | `/findings [id] [--severity high]` | Findings table with a detail pane |
 | `/history [project]` | Previous assessments |
 | `/report [markdown/html/json]` | Write a report of the latest assessment |
@@ -108,6 +109,8 @@ routes projects
 routes project add ./my-project --name "My Project" --url https://my.site
 routes project use my-project
 routes project show
+routes verify ./my-app --tests plan.json [--patch fix.diff] [--json] [-o result.json]
+                                                        # build, run and test in a disposable sandbox (docs/BUILD_RUN.md)
 routes doctor [--quick] [--json]
 routes engine up | status | stop
 routes --version
@@ -118,7 +121,8 @@ routes --version
 | 0 | Completed |
 | 1 | Error, or the assessment failed |
 | 2 | Not started: permission not confirmed |
-| 3 | Partially completed (one step failed) |
+| 3 | Partially completed (one step failed); for `verify`: tests failed |
+| 4 | `verify` only: dynamic verification unsupported for this project |
 
 When output is not a terminal (a pipe or a file), or with `--no-animation`, the commands print plain lines without colours or live rendering.
 

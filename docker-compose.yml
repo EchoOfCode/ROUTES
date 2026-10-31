@@ -167,6 +167,20 @@ services:
       MAX_CRAWL_PAGES: ${MAX_CRAWL_PAGES:-25}
       DISCOVERY_TIMEOUT_SECONDS: ${DISCOVERY_TIMEOUT_SECONDS:-600}
       SOURCE_TIMEOUT_SECONDS: ${SOURCE_TIMEOUT_SECONDS:-900}
+      # Build-and-run sandboxes (docs/BUILD_RUN.md). Builds run one at a time by default.
+      MAX_CONCURRENT_BUILD_RUNS: ${MAX_CONCURRENT_BUILD_RUNS:-1}
+      BUILD_RUNNER_MEMORY_MB: ${BUILD_RUNNER_MEMORY_MB:-3072}
+      BUILD_RUNNER_MILLICPUS: ${BUILD_RUNNER_MILLICPUS:-2000}
+      BUILD_RUNNER_PIDS: ${BUILD_RUNNER_PIDS:-512}
+      BUILD_WORK_TMPFS: ${BUILD_WORK_TMPFS:-2g}
+      BUILD_DB_MEMORY_MB: ${BUILD_DB_MEMORY_MB:-512}
+      BUILD_DOWNLOAD_MAX_BYTES: ${BUILD_DOWNLOAD_MAX_BYTES:-536870912}
+      BUILD_INSTALL_TIMEOUT_SECONDS: ${BUILD_INSTALL_TIMEOUT_SECONDS:-600}
+      BUILD_DATABASE_TIMEOUT_SECONDS: ${BUILD_DATABASE_TIMEOUT_SECONDS:-120}
+      BUILD_BUILD_TIMEOUT_SECONDS: ${BUILD_BUILD_TIMEOUT_SECONDS:-600}
+      BUILD_STARTUP_TIMEOUT_SECONDS: ${BUILD_STARTUP_TIMEOUT_SECONDS:-180}
+      BUILD_TESTS_TIMEOUT_SECONDS: ${BUILD_TESTS_TIMEOUT_SECONDS:-300}
+      BUILD_TOTAL_TIMEOUT_SECONDS: ${BUILD_TOTAL_TIMEOUT_SECONDS:-2400}
     volumes:
       - uploads:/data/uploads
     networks: [cli, backend, docker-control, gateway-control]
@@ -178,6 +192,9 @@ services:
       network-gateway: { condition: service_healthy }
       discovery-image: { condition: service_completed_successfully }
       analyzer-image: { condition: service_completed_successfully }
+      build-runner-image: { condition: service_completed_successfully }
+      build-db-image: { condition: service_completed_successfully }
+      test-runner-image: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=3)"]
       interval: 10s
@@ -190,7 +207,11 @@ services:
     image: routes/docker-proxy:local
     <<: *hardening
     environment:
-      ALLOWED_IMAGES: routes/discovery:local,routes/analyzer:local
+      ALLOWED_IMAGES: routes/discovery:local,routes/analyzer:local,routes/build-runner:local,routes/build-db:local,routes/test-runner:local
+      # Only this image gets an executable /work tmpfs and the larger build caps.
+      BUILD_IMAGES: routes/build-runner:local
+      MAX_BUILD_MEMORY_BYTES: "4294967296"
+      MAX_BUILD_TMPFS_BYTES: "3221225472"
       UPLOAD_VOLUME: routes_uploads
       GATEWAY_CONTAINER: routes-p1-gateway
     volumes:
@@ -232,6 +253,27 @@ services:
     build: { context: ., dockerfile: infrastructure/docker/analyzer.Dockerfile }
     image: routes/analyzer:local
     command: ["python", "-c", "print('routes/analyzer:local is ready')"]
+    network_mode: none
+    restart: "no"
+
+  build-runner-image:
+    build: { context: ., dockerfile: infrastructure/docker/build-runner.Dockerfile }
+    image: routes/build-runner:local
+    command: ["python", "-c", "print('routes/build-runner:local is ready')"]
+    network_mode: none
+    restart: "no"
+
+  build-db-image:
+    build: { context: ., dockerfile: infrastructure/docker/build-db.Dockerfile }
+    image: routes/build-db:local
+    entrypoint: ["true"]
+    network_mode: none
+    restart: "no"
+
+  test-runner-image:
+    build: { context: ., dockerfile: infrastructure/docker/test-runner.Dockerfile }
+    image: routes/test-runner:local
+    command: ["python", "-c", "print('routes/test-runner:local is ready')"]
     network_mode: none
     restart: "no"
 

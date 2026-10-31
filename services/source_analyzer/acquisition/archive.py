@@ -56,18 +56,21 @@ def safe_member_path(name: str) -> PurePosixPath | None:
     return PurePosixPath(*parts)
 
 
-def _excluded(path: PurePosixPath) -> bool:
-    return any(part in EXCLUDED_DIRS for part in path.parts[:-1])
+def _excluded(path: PurePosixPath, excluded_dirs=EXCLUDED_DIRS) -> bool:
+    return any(part in excluded_dirs for part in path.parts[:-1])
 
 
-def _write(target_root: Path, rel: PurePosixPath, source, declared: int, report: ExtractionReport, budget: list[int]) -> None:
+def _write(target_root: Path, rel: PurePosixPath, source, declared: int, report: ExtractionReport, budget: list[int],
+           *, executable: bool = False) -> None:
     dest = (target_root / rel).resolve()
     root = target_root.resolve()
     if root not in dest.parents:
         raise ArchiveError("The archive contains a path that escapes the extraction directory.")
     dest.parent.mkdir(parents=True, exist_ok=True)
     written = 0
-    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    # Owner-only permissions; the executable bit is the only mode bit ever kept
+    # (never setuid/setgid/sticky), and only when the caller asks for it.
+    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o700 if executable else 0o600)
     with os.fdopen(fd, "wb") as out:
         while chunk := source.read(CHUNK):
             written += len(chunk)
@@ -83,7 +86,8 @@ def _write(target_root: Path, rel: PurePosixPath, source, declared: int, report:
     report.bytes_written += written
 
 
-def extract_zip(archive: Path, target: Path) -> ExtractionReport:
+def extract_zip(archive: Path, target: Path, *, skip_suffixes: tuple[str, ...] = SKIPPED_SUFFIXES,
+                excluded_dirs=EXCLUDED_DIRS, keep_exec: bool = False) -> ExtractionReport:
     report = ExtractionReport()
     if not zipfile.is_zipfile(archive):
         raise ArchiveError("The upload is not a valid ZIP archive.")
@@ -118,17 +122,18 @@ def extract_zip(archive: Path, target: Path) -> ExtractionReport:
             if file_type and file_type != stat.S_IFREG:
                 report.skipped_links += 1
                 continue
-            if _excluded(rel):
+            if _excluded(rel, excluded_dirs):
                 report.skipped_excluded += 1
                 continue
-            if rel.name.lower().endswith(SKIPPED_SUFFIXES):
+            if rel.name.lower().endswith(skip_suffixes):
                 report.skipped_binary += 1
                 continue
             if info.compress_size and info.file_size / max(info.compress_size, 1) > MAX_RATIO and info.file_size > 1024 * 1024:
                 raise ArchiveError("The archive looks like a compression bomb and was rejected.")
             try:
                 with zf.open(info) as src:
-                    _write(target, rel, src, info.file_size, report, budget)
+                    _write(target, rel, src, info.file_size, report, budget,
+                           executable=keep_exec and bool(mode & 0o100) and file_type == stat.S_IFREG)
             except (zipfile.BadZipFile, EOFError, OSError) as exc:
                 if isinstance(exc, ArchiveError):
                     raise
@@ -137,7 +142,8 @@ def extract_zip(archive: Path, target: Path) -> ExtractionReport:
     return report
 
 
-def extract_tar_gz(archive: Path, target: Path) -> ExtractionReport:
+def extract_tar_gz(archive: Path, target: Path, *, skip_suffixes: tuple[str, ...] = SKIPPED_SUFFIXES,
+                   excluded_dirs=EXCLUDED_DIRS, keep_exec: bool = False) -> ExtractionReport:
     """GitHub tarballs (``owner-repo-sha/`` prefix) with the same protections."""
     report = ExtractionReport()
     budget = [0]
@@ -159,17 +165,18 @@ def extract_tar_gz(archive: Path, target: Path) -> ExtractionReport:
                 if member.size > MAX_FILE_BYTES:
                     report.skipped_binary += 1
                     continue
-                if _excluded(rel):
+                if _excluded(rel, excluded_dirs):
                     report.skipped_excluded += 1
                     continue
-                if rel.name.lower().endswith(SKIPPED_SUFFIXES):
+                if rel.name.lower().endswith(skip_suffixes):
                     report.skipped_binary += 1
                     continue
                 src = tf.extractfile(member)
                 if src is None:
                     continue
                 with src:
-                    _write(target, rel, src, member.size, report, budget)
+                    _write(target, rel, src, member.size, report, budget,
+                           executable=keep_exec and bool(member.mode & 0o100))
     except (tarfile.TarError, EOFError, OSError, zlib.error) as exc:
         if isinstance(exc, ArchiveError):
             raise

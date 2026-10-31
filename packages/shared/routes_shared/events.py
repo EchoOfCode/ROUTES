@@ -26,6 +26,11 @@ DATA_FIELDS: frozenset[str] = frozenset({
     "routes",          # route handlers found (analyzer)
     "static_matches",  # findings reported by the static rules (analyzer)
     "sqli_flows",      # SQL injection flows found by data-flow analysis (analyzer)
+    "packages",        # dependency packages installed (build runner)
+    "needs_database",  # 1 if the application needs a PostgreSQL database (build runner)
+    "tests_total",     # test cases in the plan (test runner)
+    "tests_done",      # test cases executed so far (test runner)
+    "tests_failed",    # test cases that failed so far (test runner)
 })
 MAX_VALUE = 10_000_000
 MAX_EVENTS = 200

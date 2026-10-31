@@ -353,6 +353,105 @@ def analyze(source: str = typer.Argument(..., help="GitHub repository URL, local
     _exit_for(_run_assessment(ctx, prepared))
 
 
+# ------------------------------------------------------------- build & run
+@app.command()
+def verify(source: str = typer.Argument(..., help="GitHub repository URL, local folder or .zip file"),
+           tests: str = typer.Option(..., "--tests", "-t", help="Test plan (JSON) to run against the application"),
+           patch: Optional[str] = typer.Option(None, "--patch", help="Candidate patch (unified diff) to apply to a "
+                                                                     "temporary copy"),
+           ref: Optional[str] = typer.Option(None, "--ref", help="Branch, tag or commit for a GitHub source"),
+           private: bool = typer.Option(False, "--private", help="The GitHub repository is private (token prompted)"),
+           approve_script: list[str] = typer.Option([], "--approve-script",
+                                                    help="Allow this dependency's install scripts (repeatable; "
+                                                         "'<root>' for the project's own)"),
+           as_json: bool = typer.Option(False, "--json", help="Print the structured result as JSON"),
+           output: Optional[str] = typer.Option(None, "--output", "-o", help="Also write the JSON result to this file")):
+    """Build, run and test an application in a disposable sandbox.
+
+    The source is never modified: any patch is applied to a temporary copy
+    inside the sandbox. Exit codes: 0 verified run, 3 tests failed,
+    4 dynamic verification unsupported, 1 build failure or inconclusive.
+    """
+    from pathlib import Path
+
+    from routes_core.buildrun import EXIT_CODES, BuildRunInvalid, BuildRunRequest, submit, verification_of
+    from routes_core.buildrun import wait as wait_run
+    from routes_core.engine import EngineRejected, EngineUnavailable
+    from routes_core.sources import SourceError, classify
+    from routes_cli.renderers import buildrun as BR
+
+    ctx = _ctx()
+    try:
+        spec = classify(source, ref=ref)
+        plan_data = json.loads(Path(tests).read_text("utf-8"))
+        patch_text = Path(patch).read_text("utf-8") if patch else None
+    except SourceError as exc:
+        _fail(str(exc))
+    except (OSError, ValueError) as exc:
+        _fail(f"Could not read the test plan or patch: {exc}")
+    req = BuildRunRequest(source=spec, test_plan=plan_data, patch=patch_text, approved_scripts=list(approve_script))
+    if private:
+        if not spec.is_github:
+            _fail("--private applies to GitHub repositories only.")
+        if not interactive():
+            _fail("Private repositories need an interactive terminal so the token can be entered hidden.")
+        req.token = getpass.getpass("GitHub token (hidden, Contents: Read-only): ").strip() or None
+    con = make_console(plain=as_json or not sys.stderr.isatty() or State.no_animation, stderr=True)
+    g = glyphs(con)
+    client = ctx.engine_client()
+    seen_phases: list[str] = []
+    last_msg = [""]
+
+    final_phases = ("COLLECTING_RESULTS", "COMPLETED", "FAILED", "CANCELLED", "CLEANED_UP")
+
+    def on_state(state: dict) -> None:
+        history = [p["phase"] for p in state.get("phase_history") or []]
+        new = history[len(seen_phases):]          # each phase is printed once, when the engine entered it
+        work = [ph for ph in new if ph not in final_phases]
+        closing = [ph for ph in new if ph in final_phases]
+        for ph in work:
+            seen_phases.append(ph)
+            con.print(BR.phase_line(ph, g, current=True))
+        # The latest sandbox message belongs to the work phase, so it is printed before any closing phase.
+        events = state.get("events") or []
+        if events and events[-1].get("message") and events[-1]["message"] != last_msg[0]:
+            last_msg[0] = events[-1]["message"]
+            con.print(f"      [muted]{escape(last_msg[0][:140])}[/]")
+        for ph in closing:
+            seen_phases.append(ph)
+            con.print(BR.phase_line(ph, g, current=ph not in ("COMPLETED", "FAILED", "CANCELLED", "CLEANED_UP")))
+
+    try:
+        try:
+            run = submit(client, req, cache_dir=ctx.home.cache, on_local=lambda m: con.print(f"  [muted]{escape(m)}[/]"))
+        except (BuildRunInvalid, SourceError) as exc:
+            _fail(str(exc))
+        except EngineRejected as exc:
+            _fail(f"The engine rejected the request: {exc}")
+        except EngineUnavailable:
+            _fail("The ROUTES engine is not reachable. Start it with `routes engine up` (Docker must be running).")
+        con.print(f"[heading]Build-and-run[/] [muted]run {run['id']} (Ctrl+C cancels and removes the environment)[/]")
+        cancel = threading.Event()
+        try:
+            final = wait_run(client, run, on_state=on_state, should_cancel=cancel.is_set)
+        except KeyboardInterrupt:
+            con.print("[warn]Cancelling; waiting for the sandbox to be removed...[/]")
+            cancel.set()
+            final = wait_run(client, run, on_state=on_state, should_cancel=cancel.is_set, deadline_seconds=120)
+    finally:
+        req.token = None
+        client.close()
+    if output:
+        Path(output).write_text(json.dumps(final, indent=2), "utf-8")
+    if as_json:
+        print(json.dumps(final, indent=2))
+    else:
+        out = _console()
+        out.print()
+        out.print(BR.render(final, glyphs(out)))
+    raise typer.Exit(EXIT_CODES.get(verification_of(final), 1))
+
+
 # ------------------------------------------------------------------ results
 @app.command()
 def findings(id: Optional[str] = typer.Option(None, "--id", help="Show one finding in detail, e.g. 01"),

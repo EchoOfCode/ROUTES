@@ -45,13 +45,21 @@ class Run:
     finished_at: float | None = None
     cancel: asyncio.Event = field(default_factory=asyncio.Event)
     task: asyncio.Task | None = None
+    # build_run only: explicit phases, ownership and an audit trail of manager actions.
+    phase: str | None = None
+    phase_history: list[dict] = field(default_factory=list)
+    audit: list[dict] = field(default_factory=list)
+    owner: str | None = None
 
     def public(self) -> dict:
-        return {
+        data = {
             "id": self.id, "kind": self.kind, "status": self.status, "events": self.events[-MAX_EVENTS:],
             "result": self.result, "error": self.error, "exit_code": self.exit_code,
             "network_summary": self.network_summary, "created_at": self.created_at, "finished_at": self.finished_at,
         }
+        if self.kind == "build_run":
+            data.update(phase=self.phase, phase_history=self.phase_history, audit=self.audit[-300:], owner=self.owner)
+        return data
 
 
 class SandboxError(Exception):
@@ -77,13 +85,19 @@ class RunManager:
         self.credentials = credentials
         self.runs: dict[str, Run] = {}
         self._slots = asyncio.Semaphore(settings.max_concurrent_runs)
+        self.build_slots = asyncio.Semaphore(settings.max_concurrent_build_runs)
 
     # ------------------------------------------------------------- public API
     def start(self, kind: str, spec: dict) -> Run:
         self._prune()
-        run = Run(id=uuid.uuid4().hex[:20], kind=kind)
+        run = Run(id=uuid.uuid4().hex[:20], kind=kind, owner=spec.get("requested_by"))
         self.runs[run.id] = run
-        run.task = asyncio.create_task(self._execute(run, spec))
+        if kind == "build_run":
+            from manager.buildrun import BuildRunExecutor
+
+            run.task = asyncio.create_task(BuildRunExecutor(self, run, spec).execute())
+        else:
+            run.task = asyncio.create_task(self._execute(run, spec))
         return run
 
     def cancel(self, run_id: str) -> Run | None:
@@ -243,11 +257,15 @@ class RunManager:
                 removed += 1
             for n in await self.docker.list_networks():
                 if n.get("Name", "").startswith("routes-sbx-"):
-                    await self.docker.disconnect(n["Name"], self.settings.gateway_container)
+                    try:
+                        await self.docker.disconnect(n["Name"], self.settings.gateway_container)
+                    except Exception:  # noqa: BLE001  (the gateway is usually not attached)
+                        pass
                     await self.docker.remove_network(n["Name"])
                     removed += 1
         except Exception:  # noqa: BLE001
             log.exception("orphan cleanup failed")
+        removed += sweep_stale_uploads(self.settings.uploads_dir)
         return removed
 
 
@@ -261,6 +279,25 @@ def _network_details(info: dict, gateway_container: str) -> tuple[str, str]:
     if not subnet or not gateway_ip:
         raise SandboxError("The sandbox network could not be prepared.")
     return subnet, gateway_ip
+
+
+def sweep_stale_uploads(root: str, max_age: float = 1800) -> int:
+    """After a restart no run owns an upload; remove those older than the claim window."""
+    removed = 0
+    cutoff = time.time() - max_age
+    try:
+        entries = list(Path(root).iterdir())
+    except OSError:
+        return 0
+    for entry in entries:
+        try:
+            uuid.UUID(entry.name)
+            if entry.is_dir() and not entry.is_symlink() and entry.stat().st_mtime < cutoff:
+                shutil.rmtree(entry, ignore_errors=True)
+                removed += 1
+        except (ValueError, OSError):
+            continue
+    return removed
 
 
 def remove_upload(root: str, upload_id: str) -> None:

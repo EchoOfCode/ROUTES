@@ -24,6 +24,10 @@ from gateway.sessions import GithubImport, SessionStore
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 
+# Package registries a "packages" session may reach. Fixed here, not chosen by
+# the caller, so a runtime sandbox can only ever download dependencies.
+REGISTRY_HOSTS = frozenset({"registry.npmjs.org"})
+
 
 class GithubSpec(BaseModel):
     owner: str = Field(max_length=100)
@@ -40,7 +44,7 @@ class GithubSpec(BaseModel):
 
 
 class SessionRequest(BaseModel):
-    mode: str = Field(pattern="^(web|github_import)$")
+    mode: str = Field(pattern="^(web|github_import|packages)$")
     allowed_host: str | None = Field(default=None, max_length=253)
     allowed_ports: list[int] = Field(default_factory=lambda: [80, 443], max_length=4)
     subnet: str = Field(max_length=64)
@@ -82,6 +86,15 @@ def build_control_app(store: SessionStore, *, token: str, allowed_peers: list) -
                 return JSONResponse({"error": "allowed_host required"}, status_code=422)
             hosts = frozenset({normalise_hostname(spec.allowed_host)})
             github = None
+        elif spec.mode == "packages":
+            # Dependency downloads over HTTPS only, plus an optional one-time repository import.
+            if spec.allowed_host or set(spec.allowed_ports) != {443}:
+                return JSONResponse({"error": "packages sessions reach the registry on port 443 only"}, status_code=422)
+            hosts = REGISTRY_HOSTS
+            github = None
+            if spec.github is not None:
+                github = GithubImport(owner=spec.github.owner, repo=spec.github.repo, ref=spec.github.ref,
+                                      token=spec.github.token)
         else:
             if spec.github is None:
                 return JSONResponse({"error": "github spec required"}, status_code=422)

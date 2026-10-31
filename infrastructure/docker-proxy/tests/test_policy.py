@@ -199,7 +199,9 @@ def test_network_connect_only_sandbox_or_gateway():
         "/containers/routes-api-1/json": {"Name": "/routes-api-1", "Config": {"Labels": {}}},
     }))
     body = lambda c: json.dumps({"Container": c}).encode()  # noqa: E731
-    assert _authorise(proxy, "POST", "/networks/routes-sbx-1/connect", body("routes-p1-gateway"))
+    with pytest.raises(Denied):  # the network was not created for egress
+        _authorise(proxy, "POST", "/networks/routes-sbx-1/connect", body("routes-p1-gateway"))
+    assert _authorise(proxy, "POST", "/networks/routes-sbx-1/disconnect", body("routes-p1-gateway"))
     with pytest.raises(Denied):
         _authorise(proxy, "POST", "/networks/routes-sbx-1/connect", body("routes-api-1"))
     with pytest.raises(Denied):
@@ -213,3 +215,81 @@ def test_valid_spec_is_not_mutated():
     before = copy.deepcopy(spec)
     check(spec)
     assert spec == before
+
+
+# ------------------------------------------------------------ build-run images
+BUILD_LIMITS = Limits(images=frozenset({"routes/discovery:local", "routes/build-runner:local", "routes/build-db:local"}),
+                      upload_volume="routes_uploads", gateway_container="routes-p1-gateway",
+                      build_images=frozenset({"routes/build-runner:local"}))
+
+
+def build_spec(image="routes/build-runner:local") -> dict:
+    spec = valid_spec()
+    spec["Image"] = image
+    spec["HostConfig"]["Memory"] = spec["HostConfig"]["MemorySwap"] = 3 * 1024**3
+    spec["HostConfig"]["Tmpfs"] = {"/work": "rw,exec,nosuid,nodev,size=2g", "/tmp": "rw,noexec,nosuid,size=256m"}
+    return spec
+
+
+def test_build_image_gets_executable_work_and_larger_limits():
+    check_container_create(QUERY, json.dumps(build_spec()).encode(), BUILD_LIMITS)
+
+
+@pytest.mark.parametrize("mutate, reason", [
+    (lambda s: s.update(Image="routes/discovery:local"), "memory_limit_required"),     # larger caps are build-only
+    (lambda s: s["HostConfig"].update(Memory=8 * 1024**3, MemorySwap=8 * 1024**3), "memory_limit_required"),
+    (lambda s: s["HostConfig"]["Tmpfs"].update({"/tmp": "rw,exec,size=64m"}), "tmpfs_exec_forbidden"),
+    (lambda s: s["HostConfig"]["Tmpfs"].update({"/work": "rw,exec,suid,size=1g"}), "tmpfs_suid_or_dev_forbidden"),
+    (lambda s: s["HostConfig"]["Tmpfs"].update({"/work": "rw,exec,size=8g"}), "tmpfs_too_large"),
+    (lambda s: s["HostConfig"].update(Privileged=True), "privileged_forbidden"),
+    (lambda s: s["HostConfig"].update(Binds=["/var/run/docker.sock:/var/run/docker.sock"]), "binds_forbidden"),
+    (lambda s: s["HostConfig"].update(NetworkMode="host"), "network_forbidden"),
+    (lambda s: s["HostConfig"].update(ReadonlyRootfs=False), "readonly_rootfs_required"),
+    (lambda s: s.update(User="0:0"), "non_root_user_required"),
+])
+def test_build_image_keeps_every_other_control(mutate, reason):
+    spec = build_spec()
+    mutate(spec)
+    with pytest.raises(Denied) as exc:
+        check_container_create(QUERY, json.dumps(spec).encode(), BUILD_LIMITS)
+    assert exc.value.reason == reason
+
+
+def test_non_build_image_cannot_have_executable_work():
+    spec = build_spec(image="routes/build-db:local")
+    spec["HostConfig"]["Memory"] = spec["HostConfig"]["MemorySwap"] = 1024**3
+    spec["HostConfig"]["Tmpfs"] = {"/work": "rw,exec,size=512m"}
+    with pytest.raises(Denied) as exc:
+        check_container_create(QUERY, json.dumps(spec).encode(), BUILD_LIMITS)
+    assert exc.value.reason == "tmpfs_exec_forbidden"
+
+
+def test_tmpfs_mount_options_cannot_smuggle_exec():
+    spec = valid_spec()
+    spec["HostConfig"]["Mounts"] = [{"Type": "tmpfs", "Target": "/x",
+                                     "TmpfsOptions": {"SizeBytes": 1024**2, "Options": [["exec"]]}}]
+    with pytest.raises(Denied) as exc:
+        check(spec)
+    assert exc.value.reason == "tmpfs_options_forbidden"
+
+
+def test_attachments_are_limited_to_the_same_run_and_egress_networks():
+    proxy = DockerProxy(BUILD_LIMITS, inspector=FakeInspector({
+        "/networks/routes-sbx-r1-pkg": {"Name": "routes-sbx-r1-pkg",
+                                        "Labels": {"routes.sandbox": "true", "routes.run": "r1", "routes.gateway": "allowed"}},
+        "/networks/routes-sbx-r1-db": {"Name": "routes-sbx-r1-db", "Labels": {"routes.sandbox": "true", "routes.run": "r1"}},
+        "/networks/routes-sbx-r2-db": {"Name": "routes-sbx-r2-db", "Labels": {"routes.sandbox": "true", "routes.run": "r2"}},
+        "/containers/routes-sbx-r1-app/json": {"Name": "/routes-sbx-r1-app",
+                                               "Config": {"Labels": {"routes.sandbox": "true", "routes.run": "r1"}}},
+        "/containers/routes-p1-gateway/json": {"Name": "/routes-p1-gateway", "Config": {"Labels": {}}},
+    }))
+    body = lambda c: json.dumps({"Container": c}).encode()  # noqa: E731
+    assert _authorise(proxy, "POST", "/networks/routes-sbx-r1-db/connect", body("routes-sbx-r1-app"))
+    assert _authorise(proxy, "POST", "/networks/routes-sbx-r1-pkg/connect", body("routes-p1-gateway"))
+    for net, container, reason in [("routes-sbx-r2-db", "routes-sbx-r1-app", "cross_run_attachment_forbidden"),
+                                   ("routes-sbx-r1-db", "routes-p1-gateway", "gateway_network_forbidden")]:
+        with pytest.raises(Denied) as exc:
+            _authorise(proxy, "POST", f"/networks/{net}/connect", body(container))
+        assert exc.value.reason == reason
+    # Leaving a network is always permitted (cleanup must never be blocked).
+    assert _authorise(proxy, "POST", "/networks/routes-sbx-r2-db/disconnect", body("routes-sbx-r1-app"))

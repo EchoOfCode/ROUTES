@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from routes_shared.github import is_github_url, parse_github_url
-from routes_shared.sourcefiles import EXCLUDED_DIRS, SKIPPED_SUFFIXES
+from routes_shared.sourcefiles import BUILD_EXCLUDED_DIRS, BUILD_SKIPPED_SUFFIXES, EXCLUDED_DIRS, SKIPPED_SUFFIXES
 from routes_shared.uploads import MAX_UPLOAD_BYTES, ZIP_SIGNATURES
 
 MAX_PACKED_FILES = 20_000
@@ -80,11 +80,17 @@ class PackReport:
     skipped_large: int = 0
 
 
-def pack_directory(root: Path, workdir: Path) -> tuple[Path, PackReport]:
+def pack_directory(root: Path, workdir: Path, *, for_build: bool = False) -> tuple[Path, PackReport]:
     """Create ``<workdir>/<random>.zip`` from ``root``. Excluded folders (dependencies,
     build output, VCS data) and binary assets are left out; symbolic links and
     special files are never followed. Raises SourceError if the archive would
-    exceed the upload limit."""
+    exceed the upload limit.
+
+    ``for_build`` keeps what an application needs to be built and run (images,
+    fonts, ``dist``/``build`` source folders) but still leaves out dependencies,
+    VCS data, caches and prebuilt executables or native modules."""
+    excluded_dirs = BUILD_EXCLUDED_DIRS if for_build else EXCLUDED_DIRS
+    skipped = BUILD_SKIPPED_SUFFIXES if for_build else SKIPPED_SUFFIXES
     root = Path(root).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix="routes-pack-", suffix=".zip", dir=workdir)
@@ -98,7 +104,7 @@ def pack_directory(root: Path, workdir: Path) -> tuple[Path, PackReport]:
                 kept = []
                 for d in dirnames:
                     full = current / d
-                    if d in EXCLUDED_DIRS:
+                    if d in excluded_dirs:
                         report.skipped_excluded += 1
                     elif full.is_symlink():
                         report.skipped_links += 1
@@ -114,7 +120,7 @@ def pack_directory(root: Path, workdir: Path) -> tuple[Path, PackReport]:
                     if not stat.S_ISREG(st.st_mode):
                         report.skipped_links += 1
                         continue
-                    if fname.lower().endswith(SKIPPED_SUFFIXES):
+                    if fname.lower().endswith(skipped):
                         report.skipped_excluded += 1
                         continue
                     if st.st_size > MAX_FILE_BYTES:

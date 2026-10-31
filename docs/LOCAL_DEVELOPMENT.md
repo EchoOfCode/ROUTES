@@ -75,6 +75,16 @@ docker run --rm routes/network-gateway:local python -m pytest -q tests
 docker run --rm routes/docker-proxy:local python -m pytest -q tests
 docker run --rm routes/sandbox-manager:local python -m pytest -q tests
 
+# Build runner and test runner (profiling, patching, process limits, isolation checks, test evaluation)
+docker run --rm --network none --user 10001:10001 --read-only --tmpfs /tmp:uid=10001,gid=10001,exec \
+  --tmpfs /home/sandbox:uid=10001,gid=10001 -w /srv routes/build-runner:local python -m pytest -q build_runner_tests
+docker run --rm --network none --read-only --tmpfs /tmp -w /srv routes/test-runner:local python -m pytest -q test_runner_tests
+
+# Build-and-run scenarios against the real engine (synthetic fixture app only): vulnerable vs patched,
+# install/build/start/database failures, timeout, cancel, manager restart, unsupported project,
+# approved lifecycle scripts, ZIP traversal, live docker-proxy denials, and cleanup after each
+python scripts/build_run_e2e.py [--only vulnerable,patched,...] [--skip-restart]
+
 # Discovery (sample site, 25-page limit, scope, redirects, manifest, real Chromium rendering)
 docker run --rm --user 10001:10001 --read-only --tmpfs /tmp:uid=10001,gid=10001 \
   --tmpfs /home/sandbox:uid=10001,gid=10001 --shm-size 128m -w /srv routes/discovery:local \

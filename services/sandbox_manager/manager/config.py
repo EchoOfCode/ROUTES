@@ -13,6 +13,8 @@ class Settings:
     uploads_dir: str
     max_concurrent_runs: int
     max_crawl_pages: int
+    max_concurrent_build_runs: int = 1
+    build_download_max_bytes: int = 512 * 1024 * 1024
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -26,4 +28,8 @@ class Settings:
             uploads_dir=os.environ.get("UPLOADS_DIR", "/data/uploads"),
             max_concurrent_runs=int(os.environ.get("MAX_CONCURRENT_RUNS", "4")),
             max_crawl_pages=min(int(os.environ.get("MAX_CRAWL_PAGES", "25")), 25),
+            # Builds run one at a time until measurements show parallel runs are safe.
+            max_concurrent_build_runs=max(1, int(os.environ.get("MAX_CONCURRENT_BUILD_RUNS", "1"))),
+            build_download_max_bytes=min(int(os.environ.get("BUILD_DOWNLOAD_MAX_BYTES", str(512 * 1024 * 1024))),
+                                         512 * 1024 * 1024),
         )

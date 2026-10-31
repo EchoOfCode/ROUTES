@@ -8,6 +8,8 @@ Supported:
   * ``CONNECT host:port`` (HTTPS tunnelling) for web-discovery sessions.
   * Absolute-form ``GET``/``HEAD`` for plain HTTP in web-discovery sessions.
   * ``GET /import`` for GitHub import sessions (see github_import.py).
+  * ``CONNECT`` to the package registry only, for runtime "packages" sessions
+    (plus an optional one-time ``GET /import``).
 """
 
 from __future__ import annotations
@@ -180,6 +182,8 @@ class ProxyServer:
             elif req.method == "GET" and urlsplit(req.target).path == "/import":
                 await self._import(session, req, writer)
             elif req.method in ("GET", "HEAD"):
+                if session.mode == "packages":
+                    raise ProxyError(403, "https_only", "Package downloads must use HTTPS (CONNECT).")
                 await self._forward(session, req, writer)
             else:
                 raise ProxyError(405, "method_not_allowed", "Only GET and HEAD requests are permitted.")
@@ -216,7 +220,7 @@ class ProxyServer:
         return session
 
     async def _validated(self, session: Session, host: str, port: int) -> tuple[str, list[str]]:
-        if session.mode != "web":
+        if session.mode not in ("web", "packages"):
             raise ProxyError(403, "mode_forbids_egress", "This session cannot make outbound connections.")
         try:
             host = check_scope(host, port, session.allowed_hosts, session.allowed_ports)
@@ -263,7 +267,7 @@ class ProxyServer:
             up_writer.close()
 
     async def _import(self, session: Session, req: Request, writer) -> None:
-        if session.mode != "github_import" or session.github is None or self.github_fetch is None:
+        if session.mode not in ("github_import", "packages") or session.github is None or self.github_fetch is None:
             raise ProxyError(403, "import_not_permitted", "This session cannot import repositories.")
         await self.github_fetch(session, writer)
 

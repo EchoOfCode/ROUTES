@@ -25,6 +25,10 @@ COMMANDS: tuple[Spec, ...] = (
     Spec("analyze", "/analyze <github-url|folder|zip> [--url <website>] [--ref <branch>] [--private]",
          "Analyse source code statically (never executed)", ("--url", "--ref", "--project"), ("--private",),
          ("analyse",)),
+    Spec("verify", "/verify <github-url|folder|zip> --tests <plan.json> [--patch <fix.diff>] [--ref <branch>] "
+                   "[--approve <pkg,...>] [--private]",
+         "Build, run and test an app in a disposable sandbox (patch applied to a copy only)",
+         ("--tests", "--patch", "--ref", "--approve"), ("--private",)),
     Spec("findings", "/findings [id] [--severity high]", "Findings of the latest assessment", ("--severity",)),
     Spec("history", "/history [project]", "Previous assessments (5 kept per project)"),
     Spec("report", "/report [markdown|html|json]", "Write a report of the latest assessment"),
@@ -167,7 +171,7 @@ def complete(value: str, *, projects: list[str] | None = None) -> str | None:
     if projects and current and (previous == "--project" or (name == "history" and position == 1)
                                  or (name == "project" and position == 2 and tokens[1] in ("use", "show"))):
         return first(projects)
-    wants_path = (previous == "--source" or (name == "analyze" and position == 1)
+    wants_path = (previous in ("--source", "--tests", "--patch") or (name in ("analyze", "verify") and position == 1)
                   or (name == "project" and position == 2 and tokens[1] == "add"))
     if wants_path and current and not current.startswith(("http", "--", "github.com")):
         path = _complete_path(current)

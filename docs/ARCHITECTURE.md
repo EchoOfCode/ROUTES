@@ -41,7 +41,7 @@ routes CLI ──► routes_core ──► 127.0.0.1:8190 ──► sandbox-mana
 | `docker-proxy` | routes/docker-proxy | The only container with the Docker socket. Default-deny Docker API filter. | docker-control |
 | `network-gateway` | routes/network-gateway | Egress proxy and GitHub import path for sandboxes. Enforces destination policy. | gateway-control, egress (+ per-run networks) |
 | `postgres`, `redis` | upstream | Data and job queues. | backend |
-| `discovery-image`, `analyzer-image` | sandbox images | Build-only services; they exit immediately. Sandbox containers are started only by the Sandbox Manager. | none |
+| `discovery-image`, `analyzer-image`, `build-runner-image`, `build-db-image`, `test-runner-image` | sandbox images | Build-only services; they exit immediately. Sandbox containers are started only by the Sandbox Manager. | none |
 | `sample-site` | python | `testing` profile only: deterministic site for tests. | egress |
 
 Profiles:
@@ -124,5 +124,6 @@ Next.js App Router with client-side data fetching (`hooks/use-api.ts`) and polli
 ## Extension points for later phases
 
 - `FindingStatus.CONFIRMED` exists but is never produced in Phase 1.
-- New sandbox kinds go in `policies/limits.py` with an image allow-listed in the Docker proxy.
+- New sandbox kinds go in `policies/limits.py` with an image allow-listed in the Docker proxy. `build_run` (see [BUILD_RUN.md](BUILD_RUN.md)) is the first multi-container kind: `manager/buildrun.py` orchestrates the build runner, a disposable PostgreSQL and a test runner on private per-run networks, with explicit phases and an audit trail.
+- The Remediation Engine (future) submits a candidate patch and a test plan through `routes_core.buildrun.submit`; the engine returns evidence, never a security verdict.
 - New detection engines produce `routes_shared.contracts.Finding` objects; persistence and UI are already generic.

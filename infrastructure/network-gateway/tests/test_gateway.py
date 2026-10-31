@@ -345,3 +345,52 @@ def test_web_session_cannot_import():
         out = await _request(port, f"GET /import HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
         assert out.startswith(b"HTTP/1.1 403")
     run(go())
+
+
+# ------------------------------------------------------------ packages sessions
+
+
+def _packages_session(store, github=None):
+    return store.create(mode="packages", allowed_hosts=frozenset({"registry.npmjs.org"}),
+                        allowed_ports=frozenset({443}), subnet=ipaddress.ip_network("127.0.0.0/8"),
+                        expires_at=time.time() + 60, max_bytes=10_000_000, github=github)
+
+
+def test_packages_session_reaches_only_the_registry_over_https():
+    async def go():
+        _, store, seen, _, port, _ = await _harness({"registry.npmjs.org": [PUBLIC], "evil.example": [PUBLIC]})
+        s = _packages_session(store)
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(f"CONNECT registry.npmjs.org:443 HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        await writer.drain()
+        assert (await reader.readuntil(b"\r\n\r\n")).startswith(b"HTTP/1.1 200")
+        writer.close()
+        out = await _request(port, f"CONNECT evil.example:443 HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        assert out.startswith(b"HTTP/1.1 403") and b"host_out_of_scope" in out
+        out = await _request(port, f"CONNECT registry.npmjs.org:80 HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        assert b"port_not_allowed" in out
+        out = await _request(port, f"GET http://registry.npmjs.org/next HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        assert out.startswith(b"HTTP/1.1 403") and b"https_only" in out
+        assert len(seen) == 1
+    run(go())
+
+
+def test_packages_session_without_repository_cannot_import():
+    async def go():
+        _, store, _, _, port, _ = await _harness({}, github=GithubFetcher())
+        s = _packages_session(store)
+        out = await _request(port, f"GET /import HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        assert out.startswith(b"HTTP/1.1 403") and b"import_not_permitted" in out
+    run(go())
+
+
+def test_packages_session_with_repository_imports_once():
+    async def go():
+        upstream, store, seen, port = await _github_harness(
+            {"/acme/app/tar.gz/main": (200, {}, b"TARBALL")})()
+        s = _packages_session(store, github=GithubImport(owner="acme", repo="app", ref="main", token=None))
+        first = await _request(port, f"GET /import HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        assert first.startswith(b"HTTP/1.1 200") and b"TARBALL" in first
+        second = await _request(port, f"GET /import HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        assert second.startswith(b"HTTP/1.1 409")
+    run(go())

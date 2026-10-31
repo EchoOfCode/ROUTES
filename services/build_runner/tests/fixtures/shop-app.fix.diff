@@ -1,0 +1,18 @@
+diff --git a/app/api/products/route.js b/app/api/products/route.js
+index 64a1d2f..d380e64 100644
+--- a/app/api/products/route.js
++++ b/app/api/products/route.js
+@@ -3,11 +3,11 @@ import { pool } from "../../../lib/db";
+ 
+ export const dynamic = "force-dynamic";
+ 
+-// Deliberately vulnerable (fixture): user input is interpolated into SQL.
++// Fixed: the search term is passed as a bound parameter.
+ export async function GET(request) {
+   const q = request.nextUrl.searchParams.get("q") ?? "";
+   try {
+-    const result = await pool.query(`SELECT id, name, price FROM products WHERE name ILIKE '%${q}%' ORDER BY id`);
++    const result = await pool.query("SELECT id, name, price FROM products WHERE name ILIKE '%' || $1 || '%' ORDER BY id", [q]);
+     return NextResponse.json(result.rows);
+   } catch (e) {
+     return NextResponse.json({ error: "query failed" }, { status: 500 });

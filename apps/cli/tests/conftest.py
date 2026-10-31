@@ -118,6 +118,14 @@ class FakeEngineClient:
 
     def start(self, spec):
         self._check()
+        if spec["kind"] == "build_run":
+            with self.e.lock:
+                self.e.counter += 1
+                rid = f"run{self.e.counter}"
+                self.e.specs.append(dict(spec))
+                self.e.runs[rid] = {"spec": spec, "build": True, "step": 0, "cancel": False}
+            return {"id": rid, "kind": "build_run", "status": "pending", "phase": "CREATED",
+                    "phase_history": [], "events": []}
         if spec["kind"] == "discovery" and self.e.reject_discovery:
             raise EngineRejected(self.e.reject_discovery)
         with self.e.lock:
@@ -131,6 +139,8 @@ class FakeEngineClient:
 
     def get(self, run_id):
         r = self.e.runs[run_id]
+        if r.get("build"):
+            return self._build_state(run_id, r)
         if r["cancel"]:
             return {"id": run_id, "status": "cancelled", "events": r["events"][:r["step"]], "error": "Cancelled.",
                     "finished_at": 1.0}
@@ -142,6 +152,27 @@ class FakeEngineClient:
                     "finished_at": 2.0}
         return {"id": run_id, "status": "completed", "events": r["events"], "result": r["result"],
                 "network_summary": {"requests": 5, "allowed": 5, "denied": 0}, "finished_at": 2.0}
+
+    def _build_state(self, run_id, r):
+        hist = lambda names: [{"phase": n, "at": float(i)} for i, n in enumerate(names)]  # noqa: E731
+        if r["cancel"]:
+            names = BUILD_PHASES[:max(r["step"], 1)] + ["CANCELLED", "CLEANED_UP"]
+            return {"id": run_id, "kind": "build_run", "status": "cancelled", "phase": "CLEANED_UP",
+                    "phase_history": hist(names), "events": [], "error": "Cancelled.", "finished_at": 3.0,
+                    "result": {"verification": "INCONCLUSIVE", "status": "cancelled", "error": "Cancelled."}}
+        limit = len(BUILD_PHASES) - 2 if not self.e.hold.is_set() else len(BUILD_PHASES)
+        r["step"] = min(r["step"] + 1, limit)
+        names = BUILD_PHASES[:r["step"]]
+        events = [{"stage": "testing", "message": "1/2 tests", "data": {"tests_total": 2, "tests_done": 1,
+                                                                        "tests_failed": 0}}] if "TESTING" in names else []
+        done = r["step"] == len(BUILD_PHASES)
+        state = {"id": run_id, "kind": "build_run", "status": "completed" if done else "running",
+                 "phase": names[-1], "phase_history": hist(names), "events": events,
+                 "finished_at": 4.0 if done else None,
+                 "network_summary": {"allowed": 15, "denied": 0, "destinations": ["registry.npmjs.org:443"]}}
+        if done:
+            state["result"] = {**BUILD_RESULT, "run_id": run_id}
+        return state
 
     def cancel(self, run_id):
         self.e.cancelled.append(run_id)
@@ -159,6 +190,19 @@ class FakeEngineClient:
     def __exit__(self, *exc):
         pass
 
+
+BUILD_PHASES = ["CREATED", "SOURCE_READY", "DEPENDENCIES_INSTALLING", "DATABASE_STARTING", "BUILDING",
+                "APPLICATION_STARTING", "TESTING", "COLLECTING_RESULTS", "COMPLETED", "CLEANED_UP"]
+BUILD_RESULT = {
+    "verification": "VERIFIED_RUN", "status": "completed",
+    "application": {"build": "passed", "startup": "passed", "health_check": "passed"},
+    "tests": {"total": 2, "passed": 2, "failed": 0, "errors": 0},
+    "security": {"total": 1, "passed": 1, "failed": 0}, "functional": {"total": 1, "passed": 1, "failed": 0},
+    "cases": [], "stages": {"source": {"status": "ready", "files": 12, "patch": {"applied": False}},
+                            "build": {"status": "passed", "command": "npm run build"},
+                            "startup": {"status": "passed", "command": "npm run start", "health": {"path": "/"}}},
+    "isolation": {"build_runner": {"verdict": "isolated", "probes": [{}] * 34}},
+}
 
 @pytest.fixture()
 def routes_home(tmp_path, monkeypatch):
@@ -184,6 +228,7 @@ def engine(monkeypatch, routes_home):
         original(self, *a, **kw)
 
     monkeypatch.setattr(service.AssessmentRunner, "__init__", fast_init)
+    monkeypatch.setattr("routes_core.buildrun.POLL_SECONDS", 0.02)
     return fake
 
 

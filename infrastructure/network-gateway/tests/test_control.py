@@ -70,3 +70,16 @@ def test_invalid_specs():
     _, c = client()
     assert c.post("/sessions", headers=AUTH, json={"mode": "github_import", "subnet": "10.201.0.0/24",
                                                     "github": {"owner": "../x", "repo": "a"}}).status_code == 422
+
+
+def test_packages_session_hosts_are_fixed_by_the_gateway():
+    store, c = client()
+    r = c.post("/sessions", headers=AUTH, json={"mode": "packages", "subnet": "10.202.0.0/24", "allowed_ports": [443]})
+    assert r.status_code == 201
+    session = store.by_token(r.json()["token"])
+    assert session.allowed_hosts == frozenset({"registry.npmjs.org"}) and session.github is None
+    # The caller cannot widen the scope.
+    assert c.post("/sessions", headers=AUTH, json={"mode": "packages", "subnet": "10.202.0.0/24",
+                                                   "allowed_ports": [443], "allowed_host": "evil.example"}).status_code == 422
+    assert c.post("/sessions", headers=AUTH, json={"mode": "packages", "subnet": "10.202.0.0/24",
+                                                   "allowed_ports": [80, 443]}).status_code == 422

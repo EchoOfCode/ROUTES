@@ -15,7 +15,7 @@ import os
 
 import h11
 
-from docker_proxy.policy import Denied, Limits, is_gateway, is_sandbox, route
+from docker_proxy.policy import Denied, Limits, check_attachment, is_gateway, is_sandbox, route
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("routes.docker-proxy")
@@ -33,6 +33,9 @@ def load_limits() -> Limits:
         max_memory=int(os.environ.get("MAX_MEMORY_BYTES", str(2 * 1024**3))),
         max_nano_cpus=int(os.environ.get("MAX_NANO_CPUS", "2000000000")),
         max_pids=int(os.environ.get("MAX_PIDS", "512")),
+        build_images=frozenset(i.strip() for i in os.environ.get("BUILD_IMAGES", "").split(",") if i.strip()),
+        max_build_memory=int(os.environ.get("MAX_BUILD_MEMORY_BYTES", str(4 * 1024**3))),
+        max_build_tmpfs_bytes=int(os.environ.get("MAX_BUILD_TMPFS_BYTES", str(3 * 1024**3))),
     )
 
 
@@ -84,8 +87,10 @@ class DockerProxy:
             if status != 200 or not is_sandbox(info) or not (info.get("Name") or "").startswith("routes-sbx-"):
                 raise Denied("network_not_sandbox")
             status, cinfo = await self.inspect(f"/containers/{decision.container}/json")
-            if status != 200 or not (is_sandbox(cinfo) or is_gateway(cinfo, self.limits.gateway_container)):
+            gateway = status == 200 and is_gateway(cinfo, self.limits.gateway_container)
+            if status != 200 or not (is_sandbox(cinfo) or gateway):
                 raise Denied("container_not_permitted")
+            check_attachment(decision.extra.get("op", "connect"), info, cinfo, gateway=gateway)
         return decision.path + (f"?{decision.query}" if decision.query else "")
 
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:

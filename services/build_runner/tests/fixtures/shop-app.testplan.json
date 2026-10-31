@@ -1,0 +1,221 @@
+{
+  "version": 1,
+  "health": {
+    "path": "/api/health",
+    "expect_status": [
+      200
+    ]
+  },
+  "database": {
+    "seed_sql": "INSERT INTO users (email, password_hash) VALUES ('synthetic-user@example.test', '$2b$10$syntheticsyntheticsyntheticsyntheticsynthetic');"
+  },
+  "tests": [
+    {
+      "id": "sec-sqli-boolean",
+      "name": "Boolean-based injection does not return every product",
+      "category": "security",
+      "request": {
+        "path": "/api/products",
+        "query": {
+          "q": "zzz%' OR 1=1 --"
+        }
+      },
+      "expect": {
+        "status": [
+          200
+        ],
+        "body_not_contains": [
+          "Widget",
+          "Gadget",
+          "Gizmo"
+        ]
+      }
+    },
+    {
+      "id": "sec-sqli-union",
+      "name": "UNION injection cannot read the users table",
+      "category": "security",
+      "request": {
+        "path": "/api/products",
+        "query": {
+          "q": "%' UNION SELECT id, email, 0 FROM users --"
+        }
+      },
+      "expect": {
+        "body_not_contains": [
+          "synthetic-user@example.test"
+        ]
+      }
+    },
+    {
+      "id": "sec-sqli-quote",
+      "name": "A single quote is handled as data, not SQL",
+      "category": "security",
+      "request": {
+        "path": "/api/products",
+        "query": {
+          "q": "'"
+        }
+      },
+      "expect": {
+        "status": [
+          200
+        ],
+        "body_contains": [
+          "[]"
+        ]
+      }
+    },
+    {
+      "id": "sec-sandbox",
+      "name": "The application runs inside a closed sandbox",
+      "category": "security",
+      "request": {
+        "path": "/api/probe"
+      },
+      "expect": {
+        "status": [
+          200
+        ],
+        "json_equals": {
+          "running_as_root": false,
+          "docker_socket": false,
+          "root_fs_writable": false,
+          "has_host_mounts": false,
+          "any_forbidden_reachable": false,
+          "db_ok": true,
+          "postinstall_ran": false,
+          "credentials_in_env": false
+        }
+      }
+    },
+    {
+      "id": "sec-limits",
+      "name": "Resource limits are applied to the application",
+      "category": "security",
+      "request": {
+        "path": "/api/probe"
+      },
+      "expect": {
+        "status": [
+          200
+        ],
+        "body_contains": [
+          "\"memory_max\":\"3221225472\"",
+          "\"pids_max\":\"512\"",
+          "\"cpu_max\":\"200000 100000\""
+        ]
+      }
+    },
+    {
+      "id": "func-search",
+      "name": "Search finds matching products only",
+      "category": "functional",
+      "request": {
+        "path": "/api/products",
+        "query": {
+          "q": "Wid"
+        }
+      },
+      "expect": {
+        "status": [
+          200
+        ],
+        "body_contains": [
+          "Widget"
+        ],
+        "body_not_contains": [
+          "Gadget"
+        ]
+      }
+    },
+    {
+      "id": "func-all",
+      "name": "An empty search lists all products",
+      "category": "functional",
+      "request": {
+        "path": "/api/products"
+      },
+      "expect": {
+        "status": [
+          200
+        ],
+        "body_contains": [
+          "Widget",
+          "Gadget",
+          "Gizmo"
+        ]
+      }
+    },
+    {
+      "id": "func-home",
+      "name": "Home page renders from the database",
+      "category": "functional",
+      "request": {
+        "path": "/"
+      },
+      "expect": {
+        "status": [
+          200
+        ],
+        "body_contains": [
+          "Fixture Shop",
+          "3",
+          "products"
+        ]
+      }
+    },
+    {
+      "id": "edge-long",
+      "name": "A very long search term is handled",
+      "category": "edge",
+      "request": {
+        "path": "/api/products",
+        "query": {
+          "q": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      "expect": {
+        "status": [
+          200
+        ],
+        "body_contains": [
+          "[]"
+        ]
+      }
+    },
+    {
+      "id": "edge-unicode",
+      "name": "Unicode search terms are handled",
+      "category": "edge",
+      "request": {
+        "path": "/api/products",
+        "query": {
+          "q": "Widgét ü 漢字"
+        }
+      },
+      "expect": {
+        "status": [
+          200
+        ]
+      }
+    },
+    {
+      "id": "health-api",
+      "name": "Health endpoint reports the database",
+      "category": "health",
+      "request": {
+        "path": "/api/health"
+      },
+      "expect": {
+        "status": [
+          200
+        ],
+        "json_equals": {
+          "ok": true,
+          "database": true
+        }
+      }
+    }
+  ]
+}

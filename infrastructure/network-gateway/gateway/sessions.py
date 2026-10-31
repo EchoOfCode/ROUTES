@@ -25,7 +25,7 @@ class GithubImport:
 class Session:
     id: str
     token: str
-    mode: Literal["web", "github_import"]
+    mode: Literal["web", "github_import", "packages"]
     allowed_hosts: frozenset[str]
     allowed_ports: frozenset[int]
     subnet: ipaddress.IPv4Network | ipaddress.IPv6Network

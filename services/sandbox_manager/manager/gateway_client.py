@@ -29,6 +29,15 @@ class GatewayClient:
                                  "ttl_seconds": min(ttl, 3600),
                                  "github": {"owner": owner, "repo": repo, "ref": ref, "token": token}})
 
+    async def open_packages(self, subnet: str, *, ttl: int, max_bytes: int, github: dict | None = None) -> dict:
+        """Registry-only HTTPS egress for dependency installation (hosts fixed by the gateway),
+        optionally with one repository import."""
+        body = {"mode": "packages", "subnet": subnet, "allowed_ports": [443], "ttl_seconds": min(ttl, 3600),
+                "max_bytes": max_bytes}
+        if github:
+            body["github"] = github
+        return await self._open(body)
+
     async def close(self, session_id: str) -> dict | None:
         r = await self._client.delete(f"/sessions/{session_id}")
         return r.json() if r.status_code == 200 else None
