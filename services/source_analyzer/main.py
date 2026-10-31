@@ -92,8 +92,22 @@ def analyse(root: Path, kind: str, target_host: str) -> dict:
         emit("tracing_data_flow", "Tracing user input to database queries")
         ctx = AnalysisContext(files=sources, tsconfig_paths=profile.tsconfig_paths,
                               tsconfig_base=profile.tsconfig_base, pg_declared="pg" in profile.dep_names())
+        snapshot_failures = 0
         for vuln_class in VULN_CLASSES:
-            findings.extend(vuln_class.detect(ctx))
+            plugin_findings = vuln_class.detect(ctx)
+            for f in plugin_findings:
+                try:
+                    snapshot = vuln_class.build_snapshot(f, ctx)
+                    f["snapshot"] = {"file": snapshot.file, "start_line": snapshot.start_line,
+                                     "end_line": snapshot.end_line, "code": snapshot.code}
+                except Exception:  # noqa: BLE001
+                    # The finding itself is still valid and reported; only
+                    # the remediation-loop snapshot is unavailable for it.
+                    f["snapshot"] = None
+                    snapshot_failures += 1
+            findings.extend(plugin_findings)
+        if snapshot_failures:
+            warnings.append(f"{snapshot_failures} finding(s) could not have a code snapshot built for them.")
         warnings.extend(ctx.warnings)
 
         analyzer = ctx.sqli_analyzer

@@ -150,6 +150,27 @@ def test_xss_reflected_response(nextjs):
     assert f["technical_details"]["source"]["name"] == "name"
 
 
+def test_findings_carry_a_snapshot_of_their_enclosing_function(nextjs):
+    """S8a: the snapshot (rather than just file/line) is persisted at scan
+    time, since the worker has no way to rebuild it later."""
+    search = next(f for f in sqli(nextjs) if f["file"] == "app/api/search/route.ts")
+    snapshot = search["snapshot"]
+    assert snapshot is not None
+    assert snapshot["file"] == "app/api/search/route.ts"
+    assert snapshot["start_line"] < search["line"] < snapshot["end_line"]
+    assert "export async function GET" in snapshot["code"]
+    assert "pool.query" in snapshot["code"]
+
+    dom_sink = next(f for f in xss(nextjs) if f["rule_id"] == "routes.xss.dom-sink-tainted")
+    assert dom_sink["snapshot"] is not None
+    assert dom_sink["snapshot"]["code"].strip().startswith("export function Preview")
+
+    # Semgrep-sourced findings aren't behind a VulnClass plugin yet, so they
+    # have no snapshot - confirmed absent rather than silently fabricated.
+    secret_finding = next(f for f in nextjs["findings"] if f["rule_id"] == "routes.secrets.aws-access-key")
+    assert secret_finding.get("snapshot") is None
+
+
 def test_semgrep_rules(nextjs):
     rules = {(f["rule_id"], f["file"], f["line"]) for f in nextjs["findings"]}
     assert ("routes.exec.child-process-dynamic", "app/api/exec/route.ts", 5) in rules

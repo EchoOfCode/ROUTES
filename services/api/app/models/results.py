@@ -106,6 +106,7 @@ class SecurityFinding(IdMixin, TimestampMixin, Base):
     technical_details: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     recommendation: Mapped[str] = mapped_column(Text, nullable=False)
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    snapshot: Mapped[dict | None] = mapped_column(JSONB)
 
     __table_args__ = (
         UniqueConstraint("assessment_id", "fingerprint", name="uq_security_findings_assessment_fingerprint"),

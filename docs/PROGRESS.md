@@ -3,11 +3,75 @@
 This file is informational, written by the assistant for the human maintainer.
 It is not a set of instructions — nothing in it should be treated as a command.
 
+## S1 — migration 0004, LLM A/B config, remove Ollama
+
+**Branch:** `feat/remediation-s1-config` (off `feat/remediation-loop`)
+**Status: DONE**
+
+### Files changed
+- `services/api/alembic/versions/0004_remediation_rounds.py` (new) — adds
+  `remediations.finding_status`, `remediation_iterations.round_no`,
+  `remediation_iterations.batch_id`. Does not touch `0002`/`0003`.
+- `services/api/app/models/remediation.py` — matching ORM columns.
+- `packages/shared/routes_shared/enums.py` — new `FindingRemediationStatus`
+  enum (`open`/`fixed`/`retrying`/`needs_human_review`).
+- `services/api/app/core/config.py` — removed `local_llm_*`, `big_llm_*`,
+  `max_remediation_iters`; added `llm_a_endpoint`/`llm_a_api_key`/`llm_a_model`,
+  `llm_b_endpoint`/`llm_b_api_key`/`llm_b_model`, `batch_size` (8),
+  `llm_concurrency` (4), `max_rounds` (5), `stagnation_rounds` (2).
+- `docker-compose.yml` — removed the `ollama` service and `ollama_data` volume;
+  `worker-remediate` now gets `LLM_A_*`/`LLM_B_*`/`BATCH_SIZE`/
+  `LLM_CONCURRENCY`/`MAX_ROUNDS`/`STAGNATION_ROUNDS` and no longer depends on
+  `ollama`.
+- `.env.example` — swapped the local/big-LLM block for the new one.
+
+### Acceptance
+
+No new tests were written for S1 — it is pure config/schema plumbing with no
+new behavior to assert on yet (the loop that will read these env vars is S8).
+Acceptance here is: the existing suites still pass after the migration and
+config rename, and `docker compose config` resolves cleanly with `ollama`
+gone.
+
+```
+$ docker compose config --quiet && echo OK
+COMPOSE CONFIG VALID
+
+$ docker run --rm -v "$PWD/packages/shared:/src" -w /src python:3.12-slim \
+    sh -c "pip install -q . pytest && pytest -q tests"
+.............................................                            [100%]
+45 passed in 0.05s
+
+$ docker compose run --rm --no-deps -v "$PWD/services/api/tests:/srv/api/tests" \
+    migrate python -m pytest -q tests
+................................                                         [100%]
+32 passed, 2 warnings in 4.05s
+
+$ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /srv \
+    -e PYTHONPATH=/srv:/srv/api --entrypoint python migrate -m pytest -q worker/tests
+........                                                                 [100%]
+8 passed, 1 warning in 1.05s
+```
+
+### Not working / stubbed / assumed
+
+- `finding_status` and `round_no`/`batch_id` are **columns that exist but
+  nothing writes to yet**. The no-op `remediate.py` job (unchanged since M0)
+  never touches them. They become meaningful once S8 (loop controller) exists.
+- `llm_a_*`/`llm_b_*`/`BATCH_SIZE`/`LLM_CONCURRENCY`/`MAX_ROUNDS`/
+  `STAGNATION_ROUNDS` are config fields **nothing reads yet** — no client, no
+  loop. Grep-verified zero references outside `config.py`/`docker-compose.yml`/
+  `.env.example`.
+- `FindingRemediationStatus.OPEN` as the default is my own choice (not stated
+  in the prompt) — it's the natural "nothing has run yet" state before a loop
+  touches a finding; flag if you intended a different default.
+- Everything from the audit's NOT STARTED list (items 3-11) is still exactly
+  that — unchanged by S1.
+
 ## S2 — redact_for_llm() / restore(): entropy + numbered placeholders
 
 **Branch:** `feat/remediation-s2-redaction` (off `feat/remediation-loop`, which now
 includes S1)
-**Last commit:** not yet committed — pending review
 **Status: DONE**
 
 Note on process: I went straight to implementation on this step instead of
@@ -74,7 +138,6 @@ part of that run: `test_redact_for_llm_planted_secrets_corpus_zero_leaks`.
 
 **Branch:** `feat/remediation-s3-vulnclass` (off `feat/remediation-loop`, which
 now includes S1+S2)
-**Last commit:** not yet committed — pending review
 **Status: DONE** (detect() only - see below)
 
 ### Files changed
@@ -140,7 +203,6 @@ actual "no behavior change" proof) + 3 new tests in `test_vuln_classes.py`.
 
 **Branch:** `feat/remediation-s4-snapshot` (off `feat/remediation-loop`, which
 now includes S1+S2+S3)
-**Last commit:** not yet committed — pending review
 **Status: DONE**
 
 ### Files changed
@@ -195,11 +257,79 @@ one of which was corrected above) + 4 new `test_snapshot.py` tests.
   inherited by both plugins unchanged, since the extraction logic doesn't
   differ by vulnerability class — only `detect()` differs per plugin.
 
+## S5 — SandboxRunner interface
+
+**Branch:** `feat/remediation-s5-sandbox-runner` (off `feat/remediation-loop`,
+after S6/S6b)
+**Status: DONE**
+
+### Files changed
+- `services/worker/sandbox/runner.py` (new) — `SandboxRunner` ABC,
+  `SandboxRunRequest`/`SandboxFile`/`TestResult`/`SandboxRunResult`
+  dataclasses, matching the input/output shape in the prompt exactly.
+- `services/worker/sandbox/fake.py` (new) — `FakeSandboxRunner` (records
+  every request, returns a pre-configured canned result) + `canned_pass`/
+  `canned_fail`/`canned_timeout`/`canned_missing_stub`.
+- `services/worker/sandbox/real.py` (new) — `RealSandboxRunner`: POSTs to
+  sandbox_manager's existing `/runs`, polls `/runs/{id}`, same pattern the
+  worker already uses for discovery/source. sandbox_manager itself is
+  untouched and has no run `kind` for this yet, so every real call gets
+  rejected (422) today — mapped to `status="error"`, never an exception.
+- `services/worker/sandbox/__init__.py` (new) — exports +
+  `build_sandbox_runner(kind, ...)`, the actual config-driven switch point.
+- `services/api/app/core/config.py` / `docker-compose.yml` / `.env.example` —
+  `SANDBOX_RUNNER_KIND` (default `fake`).
+- `docs/sandbox-contract.md` (new) — the interface contract, written for
+  the sandbox's owner, explicit that `status` is a mechanical signal (a
+  testbench run against *original* vulnerable code is expected to report
+  `"failed"` — that's the correct outcome at that point, not an error).
+- `services/worker/tests/test_sandbox_runner.py` (new) — all four canned
+  scenarios; `RealSandboxRunner`'s request shape, graceful handling of a
+  422 rejection and of an unreachable manager, mapping of a plausible
+  completed/failed/timeout/cancelled sandbox_manager response, and its own
+  deadline/cancel-on-timeout behavior.
+
+### Acceptance (raw output)
+
+```
+$ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /srv \
+    -e PYTHONPATH=/srv:/srv/api --entrypoint python migrate -m pytest -q worker/tests
+........................................                                [100%]
+40 passed, 1 warning in 1.14s
+
+$ docker compose run --rm --no-deps -v "$PWD/services/api/tests:/srv/api/tests" \
+    migrate python -m pytest -q tests
+................................                                         [100%]
+32 passed, 2 warnings in 4.43s
+
+$ docker compose config --quiet && echo "COMPOSE CONFIG VALID"
+COMPOSE CONFIG VALID
+```
+40 worker tests = 26 from S6/S6b + 14 new sandbox-runner tests.
+
+### Not working / stubbed / assumed
+
+- **`RealSandboxRunner` is plumbing, not a working path.** sandbox_manager
+  has no `kind` that accepts a verification run, so every real call is
+  rejected today (tested and confirmed graceful, not a crash). It becomes
+  functional only once sandbox_manager's owner adds a matching kind — no
+  interface change needed on this side when that happens.
+- **The response-mapping logic in `_to_result` is necessarily speculative**
+  — I guessed a plausible shape for what sandbox_manager's eventual
+  `result` payload might contain (`tests`/`stdout`/`stderr`/`duration_ms`),
+  modeled on its existing `Run.public()` response shape, since no real
+  implementation exists to confirm against. This may need adjusting once
+  the sandbox owner defines the actual payload.
+- **sandbox_manager, docker-proxy, and network-gateway source are
+  completely untouched** — confirmed via `git status`/diff on this branch;
+  nothing outside `services/worker/`, `services/api/app/core/config.py`,
+  `docker-compose.yml`, `.env.example`, and `docs/` changed.
+- Nothing calls `build_sandbox_runner` yet — that's S8 (loop controller).
+
 ## S6 — generic LLM client, LLM A/B, fix validation
 
 **Branch:** `feat/remediation-s6-llm-client` (off `feat/remediation-loop`, which
 now includes S1+S2+S3+S4)
-**Last commit:** not yet committed — pending review
 **Status: DONE**
 
 ### Two architecture corrections made mid-step (not in the original file list)
@@ -380,75 +510,6 @@ $ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /sr
   Worth revisiting whether those two interface methods still have a purpose
   or should be removed.
 
-## S5 — SandboxRunner interface
-
-**Branch:** `feat/remediation-s5-sandbox-runner` (off `feat/remediation-loop`,
-after S6/S6b)
-**Status: DONE**
-
-### Files changed
-- `services/worker/sandbox/runner.py` (new) — `SandboxRunner` ABC,
-  `SandboxRunRequest`/`SandboxFile`/`TestResult`/`SandboxRunResult`
-  dataclasses, matching the input/output shape in the prompt exactly.
-- `services/worker/sandbox/fake.py` (new) — `FakeSandboxRunner` (records
-  every request, returns a pre-configured canned result) + `canned_pass`/
-  `canned_fail`/`canned_timeout`/`canned_missing_stub`.
-- `services/worker/sandbox/real.py` (new) — `RealSandboxRunner`: POSTs to
-  sandbox_manager's existing `/runs`, polls `/runs/{id}`, same pattern the
-  worker already uses for discovery/source. sandbox_manager itself is
-  untouched and has no run `kind` for this yet, so every real call gets
-  rejected (422) today — mapped to `status="error"`, never an exception.
-- `services/worker/sandbox/__init__.py` (new) — exports +
-  `build_sandbox_runner(kind, ...)`, the actual config-driven switch point.
-- `services/api/app/core/config.py` / `docker-compose.yml` / `.env.example` —
-  `SANDBOX_RUNNER_KIND` (default `fake`).
-- `docs/sandbox-contract.md` (new) — the interface contract, written for
-  the sandbox's owner, explicit that `status` is a mechanical signal (a
-  testbench run against *original* vulnerable code is expected to report
-  `"failed"` — that's the correct outcome at that point, not an error).
-- `services/worker/tests/test_sandbox_runner.py` (new) — all four canned
-  scenarios; `RealSandboxRunner`'s request shape, graceful handling of a
-  422 rejection and of an unreachable manager, mapping of a plausible
-  completed/failed/timeout/cancelled sandbox_manager response, and its own
-  deadline/cancel-on-timeout behavior.
-
-### Acceptance (raw output)
-
-```
-$ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /srv \
-    -e PYTHONPATH=/srv:/srv/api --entrypoint python migrate -m pytest -q worker/tests
-........................................                                [100%]
-40 passed, 1 warning in 1.14s
-
-$ docker compose run --rm --no-deps -v "$PWD/services/api/tests:/srv/api/tests" \
-    migrate python -m pytest -q tests
-................................                                         [100%]
-32 passed, 2 warnings in 4.43s
-
-$ docker compose config --quiet && echo "COMPOSE CONFIG VALID"
-COMPOSE CONFIG VALID
-```
-40 worker tests = 26 from S6/S6b + 14 new sandbox-runner tests.
-
-### Not working / stubbed / assumed
-
-- **`RealSandboxRunner` is plumbing, not a working path.** sandbox_manager
-  has no `kind` that accepts a verification run, so every real call is
-  rejected today (tested and confirmed graceful, not a crash). It becomes
-  functional only once sandbox_manager's owner adds a matching kind — no
-  interface change needed on this side when that happens.
-- **The response-mapping logic in `_to_result` is necessarily speculative**
-  — I guessed a plausible shape for what sandbox_manager's eventual
-  `result` payload might contain (`tests`/`stdout`/`stderr`/`duration_ms`),
-  modeled on its existing `Run.public()` response shape, since no real
-  implementation exists to confirm against. This may need adjusting once
-  the sandbox owner defines the actual payload.
-- **sandbox_manager, docker-proxy, and network-gateway source are
-  completely untouched** — confirmed via `git status`/diff on this branch;
-  nothing outside `services/worker/`, `services/api/app/core/config.py`,
-  `docker-compose.yml`, `.env.example`, and `docs/` changed.
-- Nothing calls `build_sandbox_runner` yet — that's S8 (loop controller).
-
 ## S7 — testbench gate with the known-bad-fix library (SQLi first)
 
 **Branch:** `feat/remediation-s7-gate` (off `feat/remediation-loop`, after S5)
@@ -515,68 +576,85 @@ classes, nothing to fix.
   again with a regenerated testbench, counting attempts, and setting
   `needs_human_review` after 2 tries is S8's job.
 
-## S1 — migration 0004, LLM A/B config, remove Ollama
+## S8a — persist the snapshot at scan time
 
-**Branch:** `feat/remediation-s1-config` (off `feat/remediation-loop`)
-**Last commit:** not yet committed — pending review (see message accompanying this update)
+**Branch:** `feat/remediation-s8a-snapshot-persist` (off `feat/remediation-loop`,
+after S7). First of three S8 sub-steps (8a/8b/8c), split out because S8
+otherwise touches too much at once.
 **Status: DONE**
 
+### Why this exists
+
+`build_snapshot` (S4) lives in `source_analyzer`, which only runs inside the
+scan sandbox and is destroyed after - the repo's source never persists
+anywhere `worker-remediate` can reach. The loop controller (S8c) needs a
+snapshot to hand to LLM A. Resolution: build the snapshot once, at scan
+time (where the parsed AST and file content already exist), and persist it
+on the finding - the worker just reads it from Postgres, no re-fetching or
+re-parsing needed.
+
+### A real bug caught along the way
+
+Writing the end-to-end test for this exposed a genuine bug in S4's
+`_enclosing_function`, not just a test-writing mistake: "smallest enclosing
+function" picked a bare anonymous callback (`useEffect(() => {...})`)
+instead of the named `Preview` function around it. That callback has no
+name, isn't exported, and is embedded as a call argument - not an
+independently reinsertable unit, so it made a useless snapshot. Fixed by
+excluding candidates whose immediate parent is an `arguments` node unless
+there's no other option, with a dedicated regression test in
+`test_snapshot.py`.
+
 ### Files changed
-- `services/api/alembic/versions/0004_remediation_rounds.py` (new) — adds
-  `remediations.finding_status`, `remediation_iterations.round_no`,
-  `remediation_iterations.batch_id`. Does not touch `0002`/`0003`.
-- `services/api/app/models/remediation.py` — matching ORM columns.
-- `packages/shared/routes_shared/enums.py` — new `FindingRemediationStatus`
-  enum (`open`/`fixed`/`retrying`/`needs_human_review`).
-- `services/api/app/core/config.py` — removed `local_llm_*`, `big_llm_*`,
-  `max_remediation_iters`; added `llm_a_endpoint`/`llm_a_api_key`/`llm_a_model`,
-  `llm_b_endpoint`/`llm_b_api_key`/`llm_b_model`, `batch_size` (8),
-  `llm_concurrency` (4), `max_rounds` (5), `stagnation_rounds` (2).
-- `docker-compose.yml` — removed the `ollama` service and `ollama_data` volume;
-  `worker-remediate` now gets `LLM_A_*`/`LLM_B_*`/`BATCH_SIZE`/
-  `LLM_CONCURRENCY`/`MAX_ROUNDS`/`STAGNATION_ROUNDS` and no longer depends on
-  `ollama`.
-- `.env.example` — swapped the local/big-LLM block for the new one.
+- `packages/shared/routes_shared/contracts.py` — new `SnapshotOut` model,
+  `Finding.snapshot: SnapshotOut | None`.
+- `services/source_analyzer/vuln_classes/base.py` — the `_enclosing_function`
+  bug fix above.
+- `services/source_analyzer/main.py` — calls `vuln_class.build_snapshot(f, ctx)`
+  per finding right after `detect()`; failures are caught per-finding (the
+  finding itself is still reported, only its snapshot is unavailable) and
+  summarized as one warning, never crash the scan.
+- `services/api/app/models/results.py` + `0005_finding_snapshot.py` — new
+  `snapshot` JSONB column on `SecurityFinding`.
+- `services/worker/jobs/source.py` — `state_findings()` passes it through.
+- `services/source_analyzer/tests/test_analysis.py` — end-to-end: a real
+  SQLi finding's snapshot spans its enclosing function; the XSS dom-sink
+  finding's snapshot correctly widens past the `useEffect` callback to
+  `Preview`; a Semgrep-sourced finding (no VulnClass plugin) has no
+  snapshot (confirmed absent, not fabricated).
+- `services/source_analyzer/tests/test_snapshot.py` — the callback/bug-fix
+  regression test.
 
-### Acceptance
-
-No new tests were written for S1 — it is pure config/schema plumbing with no
-new behavior to assert on yet (the loop that will read these env vars is S8).
-Acceptance here is: the existing suites still pass after the migration and
-config rename, and `docker compose config` resolves cleanly with `ollama`
-gone.
+### Acceptance (raw output)
 
 ```
-$ docker compose config --quiet && echo OK
-COMPOSE CONFIG VALID
+$ docker run --rm --user 10001:10001 --read-only --tmpfs /tmp:uid=10001,gid=10001 \
+    --tmpfs /home/sandbox:uid=10001,gid=10001 --tmpfs /work:uid=10001,gid=10001 \
+    -w /srv routes/analyzer:local python -m pytest -q source_analyzer/tests
+............................................                             [100%]
+44 passed, 1 warning in 6.26s
 
-$ docker run --rm -v "$PWD/packages/shared:/src" -w /src python:3.12-slim \
-    sh -c "pip install -q . pytest && pytest -q tests"
-.............................................                            [100%]
-45 passed in 0.05s
-
-$ docker compose run --rm --no-deps -v "$PWD/services/api/tests:/srv/api/tests" \
-    migrate python -m pytest -q tests
+$ docker compose run --rm --no-deps -v "$PWD/services/api/tests:/srv/api/tests" migrate python -m pytest -q tests
 ................................                                         [100%]
-32 passed, 2 warnings in 4.05s
+32 passed, 2 warnings in 4.53s
 
 $ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /srv \
     -e PYTHONPATH=/srv:/srv/api --entrypoint python migrate -m pytest -q worker/tests
-........                                                                 [100%]
-8 passed, 1 warning in 1.05s
+..............................................                           [100%]
+46 passed, 3 warnings in 1.18s
 ```
 
 ### Not working / stubbed / assumed
 
-- `finding_status` and `round_no`/`batch_id` are **columns that exist but
-  nothing writes to yet**. The no-op `remediate.py` job (unchanged since M0)
-  never touches them. They become meaningful once S8 (loop controller) exists.
-- `llm_a_*`/`llm_b_*`/`BATCH_SIZE`/`LLM_CONCURRENCY`/`MAX_ROUNDS`/
-  `STAGNATION_ROUNDS` are config fields **nothing reads yet** — no client, no
-  loop. Grep-verified zero references outside `config.py`/`docker-compose.yml`/
-  `.env.example`.
-- `FindingRemediationStatus.OPEN` as the default is my own choice (not stated
-  in the prompt) — it's the natural "nothing has run yet" state before a loop
-  touches a finding; flag if you intended a different default.
-- Everything from the audit's NOT STARTED list (items 3-11) is still exactly
-  that — unchanged by S1.
+- **Only findings produced by a registered `VulnClass` plugin get a
+  snapshot** — Semgrep-sourced findings (secrets, weak crypto, the
+  dangerously-set-inner-html pattern rule, etc.) have none, since they
+  aren't behind a plugin. Confirmed explicitly in the test rather than left
+  undocumented; remediation for those rule types isn't possible yet
+  regardless.
+- **Snapshot code is capped at 2000 chars** by the existing
+  `redact_structure(..., max_length=2000)` defence-in-depth pass that
+  already runs on the whole sandbox result — a pathologically large
+  enclosing function would get truncated. Matches the existing cap already
+  applied to `evidence_summary`/`plain_description`/etc.; not a new
+  limitation introduced here.

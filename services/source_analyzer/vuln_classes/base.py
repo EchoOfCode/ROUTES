@@ -62,13 +62,19 @@ _EXPORT_CLIMB_THROUGH = ("variable_declarator", "lexical_declaration", "variable
 
 
 def _enclosing_function(root: Node, line_no: int) -> Node | None:
-    """The smallest function node (tree-sitter FUNCTION_TYPES) containing
-    `line_no` (1-indexed), widened to its export_statement wrapper if any."""
+    """The smallest *standalone* function node (tree-sitter FUNCTION_TYPES)
+    containing `line_no` (1-indexed), widened to its export_statement
+    wrapper if any. "Standalone" excludes a bare callback passed directly as
+    a call argument (e.g. `useEffect(() => {...})`) unless there is no other
+    candidate - such a function has no name and isn't independently
+    reinsertable, so it would make a useless snapshot."""
     target_row = line_no - 1
     candidates = [n for n in walk(root) if n.type in FUNCTION_TYPES and n.start_point[0] <= target_row <= n.end_point[0]]
     if not candidates:
         return None
-    fn = min(candidates, key=lambda n: n.end_point[0] - n.start_point[0])
+    standalone = [n for n in candidates if n.parent is None or n.parent.type != "arguments"]
+    pool = standalone or candidates
+    fn = min(pool, key=lambda n: n.end_point[0] - n.start_point[0])
     node = fn
     for _ in range(_MAX_EXPORT_CLIMB):
         parent = node.parent

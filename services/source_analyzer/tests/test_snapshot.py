@@ -31,6 +31,18 @@ export const Preview = () => {
 };
 """
 
+CALLBACK_SOURCE = b"""
+export function Preview() {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.innerHTML = location.search;
+    }
+  }, []);
+  return null;
+}
+"""
+
 
 def _ctx_with_parsed_module(rel: str, source: bytes) -> AnalysisContext:
     analyzer = SqliAnalyzer({rel: source})
@@ -63,6 +75,21 @@ def test_build_snapshot_includes_export_wrapper_for_const_arrow_functions():
     snapshot = SqliVulnClass().build_snapshot(finding, ctx)
 
     assert snapshot.code.strip().startswith("export const Preview")
+    assert "innerHTML" in snapshot.code
+
+
+def test_build_snapshot_skips_a_bare_callback_argument_for_its_named_enclosing_function():
+    # The innerHTML line sits inside useEffect's anonymous callback, which
+    # is the *smallest* enclosing function but not a standalone, reinsertable
+    # unit (no name, not exported, just a call argument). The snapshot must
+    # widen to the named `Preview` function instead.
+    rel = "components/Preview.tsx"
+    ctx = _ctx_with_parsed_module(rel, CALLBACK_SOURCE)
+    finding = {"file": rel, "line": 6, "end_line": 6}  # the ref.current.innerHTML = ... line
+
+    snapshot = SqliVulnClass().build_snapshot(finding, ctx)
+
+    assert snapshot.code.strip().startswith("export function Preview")
     assert "innerHTML" in snapshot.code
 
 

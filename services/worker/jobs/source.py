@@ -128,7 +128,7 @@ def state_findings(clean: dict) -> list[dict]:
             "endpoint": f["endpoint"], "method": (f["method"] or None) and f["method"][:16], "rule_id": f["rule_id"],
             "plain_description": f["plain_description"], "evidence_summary": redact_text(f["evidence_summary"], max_length=2000),
             "technical_details": f["technical_details"], "recommendation": f["recommendation"],
-            "fingerprint": f.get("fingerprint") or _fingerprint(f),
+            "fingerprint": f.get("fingerprint") or _fingerprint(f), "snapshot": f.get("snapshot"),
         })
     return out
 
