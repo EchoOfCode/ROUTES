@@ -16,7 +16,7 @@ from app.core.config import get_settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-QUEUES = ("discovery", "source", "results")
+QUEUES = ("discovery", "source", "results", "remediate")
 
 
 def main(argv: list[str]) -> int:

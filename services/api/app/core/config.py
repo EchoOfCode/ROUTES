@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     assessment_history_limit: int = Field(default=5, alias="ASSESSMENT_HISTORY_LIMIT")
     login_rate_limit: int = Field(default=10, alias="LOGIN_RATE_LIMIT_PER_15MIN")
 
+    local_llm_endpoint: str = Field(default="http://ollama:11434", alias="LOCAL_LLM_ENDPOINT")
+    local_llm_model: str = Field(default="mistral-nemo", alias="LOCAL_LLM_MODEL")
+    big_llm_endpoint: str = Field(default="", alias="BIG_LLM_ENDPOINT")
+    big_llm_api_key: str = Field(default="", alias="BIG_LLM_API_KEY")
+    big_llm_model: str = Field(default="", alias="BIG_LLM_MODEL")
+    max_remediation_iters: int = Field(default=3, alias="MAX_ITERS")
+    remediation_token_budget: int = Field(default=8000, alias="REMEDIATION_TOKEN_BUDGET")
+
     @property
     def origins(self) -> list[str]:
         return [o.strip().rstrip("/") for o in self.allowed_origins.split(",") if o.strip()]

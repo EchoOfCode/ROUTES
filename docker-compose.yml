@@ -61,6 +61,22 @@ services:
       retries: 20
     restart: unless-stopped
 
+  # Local LLM for remediation (M3+): fills the testbench template. Not
+  # sandboxed hardening here — it's app infra like postgres/redis, not a
+  # target for untrusted input.
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
   # ------------------------------------------------------------- application
   migrate:
     build: { context: ., dockerfile: infrastructure/docker/api.Dockerfile }
@@ -117,6 +133,30 @@ services:
     networks: [backend]
     depends_on:
       worker-discovery: { condition: service_started }
+    restart: unless-stopped
+
+  # Remediation is the only worker with internet access: it calls an external
+  # big-LLM API directly (never from a sandbox). discovery/source stay fully
+  # internal, as before.
+  worker-remediate:
+    image: routes/worker:local
+    <<: *hardening
+    tmpfs: ["/tmp:size=64m"]
+    command: ["python", "-m", "worker.queues.run_worker", "remediate"]
+    environment:
+      <<: *api-env
+      LOCAL_LLM_ENDPOINT: ${LOCAL_LLM_ENDPOINT:-http://ollama:11434}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-mistral-nemo}
+      BIG_LLM_ENDPOINT: ${BIG_LLM_ENDPOINT:-}
+      BIG_LLM_API_KEY: ${BIG_LLM_API_KEY:-}
+      BIG_LLM_MODEL: ${BIG_LLM_MODEL:-}
+      MAX_ITERS: ${MAX_ITERS:-3}
+      REMEDIATION_TOKEN_BUDGET: ${REMEDIATION_TOKEN_BUDGET:-8000}
+    networks: [backend, egress]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      ollama: { condition: service_healthy }
     restart: unless-stopped
 
   web:
@@ -247,5 +287,6 @@ networks:
 volumes:
   postgres_data: {}
   redis_data: {}
+  ollama_data: {}
   uploads:
     name: routes_uploads

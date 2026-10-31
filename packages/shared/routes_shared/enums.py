@@ -35,6 +35,7 @@ class JobKind(StrEnum):
     DISCOVERY = "discovery"
     SOURCE = "source"
     RESULTS = "results"
+    REMEDIATE = "remediate"
 
 
 class JobStatus(StrEnum):
@@ -87,6 +88,15 @@ class SupportStatus(StrEnum):
     SUPPORTED = "supported"
     PARTIAL = "partial"
     UNSUPPORTED = "unsupported"
+
+
+class RemediationStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    NEEDS_HUMAN_REVIEW = "needs_human_review"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class EndpointOrigin(StrEnum):
