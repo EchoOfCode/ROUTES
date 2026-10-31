@@ -449,6 +449,72 @@ COMPOSE CONFIG VALID
   `docker-compose.yml`, `.env.example`, and `docs/` changed.
 - Nothing calls `build_sandbox_runner` yet — that's S8 (loop controller).
 
+## S7 — testbench gate with the known-bad-fix library (SQLi first)
+
+**Branch:** `feat/remediation-s7-gate` (off `feat/remediation-loop`, after S5)
+**Status: DONE** (gate check only — see scope note)
+
+### Scope note
+
+The pipeline description bundles "regenerate the testbench (max 2 tries),
+then mark needs_human_review" into the same paragraph as the gate. I split
+that out: S7 is the deterministic gate *check* (does this testbench pass,
+and if not, which specific assertion failed) — the retry/regenerate loop
+and `needs_human_review` marking is round-level state that belongs with
+S8's loop controller, which already owns attempt counts and per-finding
+status. Flagged to the user before starting; no objection raised.
+
+### Files changed
+- `services/worker/gate_library.py` (new) — `KNOWN_BAD_FIXES`: a fixed,
+  in-code library of plausible-but-wrong SQLi fixes (keyword blacklist,
+  comment-only no-op, length-limit-only) and `known_bad_fixes_for(rule_id)`.
+- `services/worker/gate.py` (new) — `run_gate(runner, finding, snapshot,
+  testbench) -> GateResult`: runs the testbench against the original code
+  (exploit tests must fail, benign must pass), then against every
+  known-bad-fix for that rule (exploit tests must *still* fail). Stops at
+  the first failing check and names it exactly (`GateResult.failed_check`).
+- `services/worker/sandbox/fake.py` — small, backward-compatible extension:
+  `FakeSandboxRunner` now also accepts a *list* of results, returned one
+  per call in order (needed to script "original passes, bad-fix #2 doesn't"
+  across the gate's multiple sandbox calls). Single-result construction
+  (S5's usage) is unchanged.
+- `services/worker/tests/test_gate.py` (new) — gate passes when everything
+  is correctly identified; rejects and names the check when exploit doesn't
+  fail on original code, when benign doesn't pass on original code, when a
+  specific known-bad-fix isn't caught (and stops early, never checking the
+  remaining ones), and on an errored run.
+
+### Acceptance (raw output)
+
+```
+$ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /srv \
+    -e PYTHONPATH=/srv:/srv/api --entrypoint python migrate -m pytest -q worker/tests
+..............................................                          [100%]
+46 passed, 3 warnings in 1.14s
+```
+46 = 40 from S5/S6/S6b + 6 new gate tests. The 3 warnings are cosmetic —
+pytest flags `Testbench`/`TestResult` as possible test classes because
+their names start with "Test"; they're domain dataclasses, not test
+classes, nothing to fix.
+
+### Not working / stubbed / assumed
+
+- **Only SQLi has a known-bad-fix library** — `known_bad_fixes_for` returns
+  `[]` for any other rule prefix (including XSS), so the gate's second
+  check is a no-op for non-SQLi findings today. Matches "SQLi first" from
+  the prompt; XSS's library is unbuilt.
+- **The three known-bad SQLi fixes are illustrative, not exhaustively
+  researched** — a keyword blacklist, a no-op comment, and a length limit.
+  Reasonable plausible-wrong patterns, but not a vetted security-research
+  corpus.
+- **Still entirely untested against a real sandbox** — every test here
+  drives `run_gate` through `FakeSandboxRunner`'s scripted results.
+  `RealSandboxRunner` (S5) still can't actually execute anything.
+- **No retry/regenerate orchestration** — by design (see Scope note). A
+  single `run_gate` call either passes or names one failure; calling it
+  again with a regenerated testbench, counting attempts, and setting
+  `needs_human_review` after 2 tries is S8's job.
+
 ## S1 — migration 0004, LLM A/B config, remove Ollama
 
 **Branch:** `feat/remediation-s1-config` (off `feat/remediation-loop`)

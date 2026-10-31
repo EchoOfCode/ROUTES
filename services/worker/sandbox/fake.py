@@ -1,6 +1,10 @@
 """FakeSandboxRunner: returns a pre-configured canned result every time, and
 records every request it was given - for tests, and for the demo's offline
 mode. Four canned scenarios, as specified: pass, fail, timeout, missing_stub.
+
+Also accepts a *list* of results, returned one per call in order (S7's gate
+makes several calls per finding - against the original code, then each
+known-bad-fix - and needs a different scripted outcome for each one).
 """
 
 from __future__ import annotations
@@ -9,13 +13,18 @@ from worker.sandbox.runner import SandboxRunRequest, SandboxRunner, SandboxRunRe
 
 
 class FakeSandboxRunner(SandboxRunner):
-    def __init__(self, result: SandboxRunResult) -> None:
-        self.result = result
+    def __init__(self, result: SandboxRunResult | list[SandboxRunResult]) -> None:
+        self._scripted = list(result) if isinstance(result, list) else None
+        self._single = None if isinstance(result, list) else result
         self.calls: list[SandboxRunRequest] = []
 
     def run(self, request: SandboxRunRequest) -> SandboxRunResult:
         self.calls.append(request)
-        return self.result
+        if self._scripted is not None:
+            if not self._scripted:
+                raise AssertionError("FakeSandboxRunner ran out of scripted results")
+            return self._scripted.pop(0)
+        return self._single
 
 
 def canned_pass() -> SandboxRunResult:
