@@ -97,6 +97,7 @@ class SecurityFinding(IdMixin, TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     file: Mapped[str | None] = mapped_column(String(2048))
     line: Mapped[int | None] = mapped_column(Integer)
+    end_line: Mapped[int | None] = mapped_column(Integer)
     endpoint: Mapped[str | None] = mapped_column(String(2048))
     method: Mapped[str | None] = mapped_column(String(16))
     rule_id: Mapped[str] = mapped_column(String(200), nullable=False)

@@ -13,7 +13,6 @@ Pipeline:
 
 from __future__ import annotations
 
-import hashlib
 import posixpath
 from dataclasses import dataclass, field
 
@@ -45,6 +44,8 @@ class Export:
     param_index: int | None = None
     members: dict[str, "Export"] = field(default_factory=dict)
     sink_line: int | None = None
+    sink_end_line: int | None = None
+    sink_snippet: str | None = None
     construction: str | None = None
     file: str | None = None
     function_name: str | None = None
@@ -77,6 +78,8 @@ class Interaction:
     via_helper: str | None = None
     sink_file: str | None = None
     sink_line: int | None = None
+    sink_end_line: int | None = None
+    sink_snippet: str | None = None
     handler_line: int | None = None
     confidence: str = "high"
 
@@ -317,10 +320,11 @@ class SqliAnalyzer:
                 continue
             if construction == "direct":
                 return Export(kind="query_fn", param_index=params[0], file=mod.rel, function_name=name,
-                              sink_line=line(node))
+                              sink_line=line(node), sink_end_line=node.end_point[0] + 1, sink_snippet=text(node)[:2000])
             if construction in ("interpolated", "concatenated"):
                 best = Export(kind="sql_helper", param_index=params[0], file=mod.rel, function_name=name,
-                              sink_line=line(node), construction=construction)
+                              sink_line=line(node), sink_end_line=node.end_point[0] + 1, sink_snippet=text(node)[:2000],
+                              construction=construction)
         return best
 
     # ------------------------------------------------------------------ sinks
@@ -465,7 +469,8 @@ class SqliAnalyzer:
                 interaction = Interaction(
                     file=mod.rel, line=line(node), call=text(node)[:200], client=client, construction=construction,
                     uses_user_input=taint is not None, endpoint=route.endpoint, method=handler.method, taint=taint,
-                    via_helper=via.function_name, sink_file=via.file, sink_line=via.sink_line, handler_line=handler.line,
+                    via_helper=via.function_name, sink_file=via.file, sink_line=via.sink_line,
+                    sink_end_line=via.sink_end_line, sink_snippet=via.sink_snippet, handler_line=handler.line,
                     confidence="medium",
                 )
             else:
@@ -475,6 +480,7 @@ class SqliAnalyzer:
                 interaction = Interaction(
                     file=mod.rel, line=line(node), call=text(node)[:200], client=client, construction=construction,
                     uses_user_input=taint is not None, endpoint=route.endpoint, method=handler.method, taint=taint,
+                    sink_end_line=node.end_point[0] + 1, sink_snippet=text(node)[:2000],
                     handler_line=handler.line, confidence="medium" if via == "heuristic" else "high",
                 )
             self.interactions.append(interaction)
@@ -518,10 +524,6 @@ def _has_values_arg(call: Node, text_index: int) -> bool:
     return first is not None and first.type == "object" and any(
         c.type == "pair" and text(c.child_by_field_name("key")).strip("'\"") == "values" for c in first.named_children
     )
-
-
-def fingerprint(*parts) -> str:
-    return hashlib.sha256("|".join(str(p) for p in parts).encode()).hexdigest()[:32]
 
 
 def params_count(fn: Node) -> int:

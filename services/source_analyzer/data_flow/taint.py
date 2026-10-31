@@ -98,12 +98,16 @@ class FunctionFacts:
 
 class TaintEngine:
     def __init__(self, fn: Node, *, request_params: dict[int, str] | None = None, taint_params: bool = False,
-                 is_pool_expr=None):
+                 is_pool_expr=None, extra_seed=None):
         """request_params: {parameter index: base} where base is "request" or "context".
-        taint_params: treat every parameter as a source (used for helper summaries)."""
+        taint_params: treat every parameter as a source (used for helper summaries).
+        extra_seed: optional callable(node) -> Source | None, consulted before the normal
+        type dispatch in taint_of(); used to recognise sources that are not function
+        parameters, such as global browser state (location.search, document.referrer)."""
         self.fn = fn
         self.facts = FunctionFacts()
         self.is_pool_expr = is_pool_expr or (lambda node, facts: False)
+        self.extra_seed = extra_seed
         for i, p in enumerate(_params(fn)):
             for name in pattern_names(p):
                 self.facts.params[name] = i
@@ -186,6 +190,10 @@ class TaintEngine:
         node = unwrap(node)
         if node is None:
             return None
+        if self.extra_seed is not None:
+            seeded = self.extra_seed(node)
+            if seeded is not None:
+                return Taint((seeded,))
         t = node.type
         if t in ("identifier", "shorthand_property_identifier"):
             return self.facts.env.get(text(node))

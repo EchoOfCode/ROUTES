@@ -6,9 +6,8 @@ import json
 import subprocess
 from pathlib import Path
 
+from routes_shared.fingerprint import fingerprint
 from routes_shared.redaction import mask_value, redact_text
-
-from source_analyzer.data_flow.sqli import fingerprint
 
 RULES = Path(__file__).parent / "rules"
 TIMEOUT = 300
@@ -88,13 +87,13 @@ def normalise(result: dict, root: Path) -> dict:
         "title": meta.get("routes_title", "Security pattern detected"),
         "file": rel,
         "line": start.get("line"),
+        "end_line": end.get("line"),
         "endpoint": None,
         "method": None,
         "rule_id": rule_id[:200],
         "plain_description": " ".join(str(meta.get("routes_plain", result.get("extra", {}).get("message", ""))).split()),
         "evidence_summary": evidence,
         "recommendation": " ".join(str(meta.get("routes_recommendation", "")).split()),
-        "technical_details": {"engine": "semgrep", "rule": rule_id, "cwe": meta.get("cwe"),
-                              "snippet": snippet, "end_line": end.get("line")},
-        "_fingerprint": fingerprint(rule_id, rel, start.get("line"), start.get("col")),
+        "technical_details": {"engine": "semgrep", "rule": rule_id, "cwe": meta.get("cwe"), "snippet": snippet},
+        "_fingerprint": fingerprint(rule_id, rel, snippet),
     }

@@ -8,7 +8,10 @@ data flow could not be resolved). Nothing here is "confirmed".
 
 from __future__ import annotations
 
-from source_analyzer.data_flow.sqli import Export, Interaction, fingerprint
+from routes_shared.fingerprint import fingerprint
+
+from source_analyzer.data_flow.sqli import Export, Interaction
+from source_analyzer.data_flow.xss import XssFinding
 
 CONSTRUCTION_TEXT = {
     "interpolated": "template-string interpolation",
@@ -20,6 +23,18 @@ SQLI_RECOMMENDATION = (
     "Keep the SQL text constant and pass user input separately as query parameters, for example "
     "pool.query('SELECT * FROM products WHERE name = $1', [name]). Values that cannot be parameters, "
     "such as column names or sort direction, should be checked against a fixed allow-list before use."
+)
+
+XSS_DOM_RECOMMENDATION = (
+    "Avoid writing to innerHTML or calling document.write() with data that could be influenced by the URL, "
+    "the referrer or other browser state. Use textContent for plain text, or sanitise the HTML with a library "
+    "such as DOMPurify before inserting it."
+)
+
+XSS_REFLECTED_RECOMMENDATION = (
+    "Do not build a response body by inserting request input into an HTML string. Return JSON "
+    "(for example NextResponse.json(...)) for data responses, or HTML-escape the value before including it "
+    "in markup."
 )
 
 
@@ -36,6 +51,9 @@ def sqli_finding(i: Interaction) -> dict:
     how = CONSTRUCTION_TEXT.get(i.construction, "dynamic string building")
     sink_file = i.sink_file or i.file
     sink_line = i.sink_line or i.line
+    sink_end_line = i.sink_end_line or sink_line
+    snippet = i.sink_snippet or i.call
+    rule_id = "routes.sqli.pg-tainted-query" if not i.via_helper else "routes.sqli.pg-tainted-helper"
     endpoint_text = f" in the {i.method} {i.endpoint} handler" if i.endpoint and i.method not in (None, "ANY") else (
         f" in the {i.endpoint} handler" if i.endpoint else "")
     if i.via_helper:
@@ -63,9 +81,10 @@ def sqli_finding(i: Interaction) -> dict:
         "title": "User input used to build a SQL query" if i.construction != "direct" else "User input used as a SQL query",
         "file": sink_file,
         "line": sink_line,
+        "end_line": sink_end_line,
         "endpoint": i.endpoint,
         "method": None if i.method == "ANY" else i.method,
-        "rule_id": "routes.sqli.pg-tainted-query" if not i.via_helper else "routes.sqli.pg-tainted-helper",
+        "rule_id": rule_id,
         "plain_description": plain,
         "evidence_summary": evidence,
         "recommendation": SQLI_RECOMMENDATION,
@@ -80,12 +99,13 @@ def sqli_finding(i: Interaction) -> dict:
             "handler_line": i.handler_line,
             "verification": "Not dynamically verified. Phase 1 reports static evidence only.",
         },
-        "_fingerprint": fingerprint("sqli", sink_file, sink_line, i.file, i.line, i.method),
+        "_fingerprint": fingerprint(rule_id, sink_file, snippet),
     }
 
 
 def sqli_inconclusive(exp: Export) -> dict:
     how = CONSTRUCTION_TEXT.get(exp.construction or "", "string building")
+    rule_id = "routes.sqli.pg-dynamic-helper"
     return {
         "type": "SQL Injection",
         "status": "inconclusive",
@@ -94,9 +114,10 @@ def sqli_inconclusive(exp: Export) -> dict:
         "title": "SQL query built from a function argument",
         "file": exp.file,
         "line": exp.sink_line,
+        "end_line": exp.sink_end_line or exp.sink_line,
         "endpoint": None,
         "method": None,
-        "rule_id": "routes.sqli.pg-dynamic-helper",
+        "rule_id": rule_id,
         "plain_description": (
             f"{exp.function_name}() builds a database query by inserting one of its arguments into the SQL text. "
             "ROUTES could not trace whether user input reaches this function, so it cannot say whether this is exploitable."),
@@ -106,5 +127,81 @@ def sqli_inconclusive(exp: Export) -> dict:
         "technical_details": {"cwe": "CWE-89", "query_construction": exp.construction, "function": exp.function_name,
                               "parameter_index": exp.param_index,
                               "verification": "Inconclusive: data flow from user input could not be established."},
-        "_fingerprint": fingerprint("sqli-helper", exp.file, exp.sink_line),
+        "_fingerprint": fingerprint(rule_id, exp.file, exp.sink_snippet or ""),
+    }
+
+
+def _xss_source_phrase(f: XssFinding) -> tuple[str, str]:
+    src = f.taint.sources[0] if f.taint.sources else None
+    if src is None:
+        return "browser-controlled data", ""
+    name = f" \"{src.name}\"" if src.name and src.name not in ("request", "req") else ""
+    return src.kind, name
+
+
+def xss_dom_sink_finding(f: XssFinding) -> dict:
+    kind, name = _xss_source_phrase(f)
+    plain = (f"{f.sink_label} is set from {kind}{name} without sanitising it first. Someone could craft a URL "
+             "or referrer that runs their own script in another visitor's browser.")
+    evidence = f"{f.sink_label} is written from {kind}{name} at {f.file}:{f.line}."
+    src = f.taint.sources[0] if f.taint.sources else None
+    return {
+        "type": "Cross-Site Scripting",
+        "status": "potential",
+        "severity": "high",
+        "confidence": "medium",
+        "title": "Browser-controlled data written to the page without sanitising",
+        "file": f.file,
+        "line": f.line,
+        "end_line": f.end_line,
+        "endpoint": None,
+        "method": None,
+        "rule_id": "routes.xss.dom-sink-tainted",
+        "plain_description": plain,
+        "evidence_summary": evidence,
+        "recommendation": XSS_DOM_RECOMMENDATION,
+        "technical_details": {
+            "cwe": "CWE-79",
+            "classification": "Static analysis: tainted browser state reaches a DOM sink unsanitised.",
+            "source": {"kind": src.kind, "name": src.name, "line": src.line, "expression": src.expression} if src else None,
+            "sink": {"label": f.sink_label, "file": f.file, "line": f.line},
+            "flow": list(f.taint.steps),
+            "verification": "Not dynamically verified. Phase 1 reports static evidence only.",
+        },
+        "_fingerprint": fingerprint("routes.xss.dom-sink-tainted", f.file, f.snippet),
+    }
+
+
+def xss_reflected_finding(f: XssFinding) -> dict:
+    kind, name = _xss_source_phrase(f)
+    endpoint_text = f" in the {f.method} {f.endpoint} handler" if f.endpoint and f.method not in (None, "ANY") else (
+        f" in the {f.endpoint} handler" if f.endpoint else "")
+    plain = (f"Input from the {kind}{name}{endpoint_text} is inserted directly into the response body. Anyone "
+             "who can send this request could run their own script in another visitor's browser.")
+    evidence = f"Untrusted {kind}{name} is written into the response at {f.file}:{f.line}."
+    src = f.taint.sources[0] if f.taint.sources else None
+    return {
+        "type": "Cross-Site Scripting",
+        "status": "potential",
+        "severity": "high",
+        "confidence": "high",
+        "title": "Request input reflected into the response without escaping",
+        "file": f.file,
+        "line": f.line,
+        "end_line": f.end_line,
+        "endpoint": f.endpoint,
+        "method": None if f.method == "ANY" else f.method,
+        "rule_id": "routes.xss.reflected-response",
+        "plain_description": plain,
+        "evidence_summary": evidence,
+        "recommendation": XSS_REFLECTED_RECOMMENDATION,
+        "technical_details": {
+            "cwe": "CWE-79",
+            "classification": "Static analysis: tainted request data reaches the response body unescaped.",
+            "source": {"kind": src.kind, "name": src.name, "line": src.line, "expression": src.expression} if src else None,
+            "sink": {"label": "response body", "file": f.file, "line": f.line},
+            "flow": list(f.taint.steps),
+            "verification": "Not dynamically verified. Phase 1 reports static evidence only.",
+        },
+        "_fingerprint": fingerprint("routes.xss.reflected-response", f.file, f.snippet),
     }

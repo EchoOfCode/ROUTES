@@ -18,10 +18,16 @@ from routes_shared.redaction import redact_structure
 from source_analyzer.acquisition.archive import ArchiveError, extract_tar_gz, extract_zip
 from source_analyzer.acquisition.github import ImportFailed, download
 from source_analyzer.data_flow.sqli import SqliAnalyzer
+from source_analyzer.data_flow.xss import XssAnalyzer
 from source_analyzer.events import emit, emit_result
 from source_analyzer.profiling.matching import collect as collect_matching
 from source_analyzer.profiling.profile import build_profile
-from source_analyzer.static_analysis.findings import sqli_finding, sqli_inconclusive
+from source_analyzer.static_analysis.findings import (
+    sqli_finding,
+    sqli_inconclusive,
+    xss_dom_sink_finding,
+    xss_reflected_finding,
+)
 from source_analyzer.static_analysis.semgrep_runner import SemgrepFailed, run_semgrep
 
 WORK = Path(os.environ.get("ROUTES_WORK_DIR", "/work"))
@@ -114,6 +120,12 @@ def analyse(root: Path, kind: str, target_host: str) -> dict:
                     findings.append(sqli_finding(i))
             for exp in analyzer.helper_sinks_without_tainted_callers():
                 findings.append(sqli_inconclusive(exp))
+
+        module_functions = {rel: list(mod.functions.values()) for rel, mod in analyzer.modules.items()}
+        xss_analyzer = XssAnalyzer(module_functions, analyzer.routes)
+        xss_analyzer.run()
+        for f in xss_analyzer.findings:
+            findings.append(xss_dom_sink_finding(f) if f.rule == "dom_sink" else xss_reflected_finding(f))
     elif profile.support_status != "unsupported":
         warnings.append("No Next.js source files were found to analyse.")
 

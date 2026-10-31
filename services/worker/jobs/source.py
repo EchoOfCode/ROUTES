@@ -124,8 +124,8 @@ def state_findings(clean: dict) -> list[dict]:
     for f in clean["findings"]:
         out.append({
             "type": f["type"], "status": f["status"], "severity": f["severity"], "confidence": f["confidence"],
-            "title": f["title"], "file": f["file"], "line": f["line"], "endpoint": f["endpoint"],
-            "method": (f["method"] or None) and f["method"][:16], "rule_id": f["rule_id"],
+            "title": f["title"], "file": f["file"], "line": f["line"], "end_line": f.get("end_line"),
+            "endpoint": f["endpoint"], "method": (f["method"] or None) and f["method"][:16], "rule_id": f["rule_id"],
             "plain_description": f["plain_description"], "evidence_summary": redact_text(f["evidence_summary"], max_length=2000),
             "technical_details": f["technical_details"], "recommendation": f["recommendation"],
             "fingerprint": f.get("fingerprint") or _fingerprint(f),
@@ -134,6 +134,9 @@ def state_findings(clean: dict) -> list[dict]:
 
 
 def _fingerprint(f: dict) -> str:
-    import hashlib
+    """Safety net: both finding producers (SQLi, Semgrep) always set a
+    fingerprint themselves, so this should not normally run."""
+    from routes_shared.fingerprint import fingerprint
 
-    return hashlib.sha256(f"{f['rule_id']}|{f['file']}|{f['line']}|{f['method']}".encode()).hexdigest()[:32]
+    snippet = (f.get("technical_details") or {}).get("snippet") or f.get("evidence_summary") or ""
+    return fingerprint(f["rule_id"], f["file"], snippet)

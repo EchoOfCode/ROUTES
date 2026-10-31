@@ -203,6 +203,7 @@ class Finding(_Model):
     title: Str500
     file: Url | None = None
     line: int | None = None
+    end_line: int | None = None
     endpoint: Url | None = None
     method: Str200 | None = None
     rule_id: Str200
