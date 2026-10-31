@@ -318,13 +318,18 @@ class RoutesApp(App):
             return
         try:
             spec = classify(cmd.args[0], ref=cmd.options.get("--ref"))
-            plan = _json.loads(Path(cmd.options["--tests"]).expanduser().read_text("utf-8"))
+            generated = None
+            if cmd.options["--tests"].strip().lower() == "auto":
+                generated = actions.generate_test_plan(actions.source_analysis(self.ctx, source=spec))
+                plan = generated.plan
+            else:
+                plan = _json.loads(Path(cmd.options["--tests"]).expanduser().read_text("utf-8"))
             patch = Path(cmd.options["--patch"]).expanduser().read_text("utf-8") if "--patch" in cmd.options else None
             approved = [x.strip() for x in cmd.options.get("--approve", "").split(",") if x.strip()]
             req = BuildRunRequest(source=spec, test_plan=plan, patch=patch, approved_scripts=approved,
                                   requested_by="routes-tui")
             req.validate()
-        except SourceError as exc:
+        except (SourceError, PlanError) as exc:
             self.notify(str(exc), severity="error", title="Cannot start")
             return
         except (OSError, ValueError) as exc:
@@ -336,6 +341,10 @@ class RoutesApp(App):
                 "installation, then run your test plan against it. The repository's own code runs inside the "
                 "sandbox, so only use projects you own or trust. Your files are never modified"
                 + (", and the patch is applied to a temporary copy only." if patch else "."))
+        if generated is not None:
+            body += (f"\n\n[b]Generated test plan:[/b] {len(plan['tests'])} tests from your latest analysis "
+                     f"({generated.flows_covered} SQL injection flow(s) covered, {generated.flows_skipped} skipped). "
+                     "Use [b]routes testplan[/b] to save and review it.")
         ok = await self.push_screen_wait(ConfirmModal("Run this application in a sandbox?", body,
                                                       yes="Build and run", no="Cancel"))
         if not ok:

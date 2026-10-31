@@ -354,9 +354,53 @@ def analyze(source: str = typer.Argument(..., help="GitHub repository URL, local
 
 
 # ------------------------------------------------------------- build & run
+def _print_generated(con, generated, path) -> None:
+    counts: dict[str, int] = {}
+    for t in generated.plan["tests"]:
+        counts[t["category"]] = counts.get(t["category"], 0) + 1
+    summary = ", ".join(f"{n} {cat}" for cat, n in sorted(counts.items()))
+    con.print(f"[heading]Generated test plan[/] [muted]({summary}; {generated.flows_covered} SQL injection flow(s) "
+              f"covered, {generated.flows_skipped} skipped)[/]" + (f"\n  written to [path]{escape(str(path))}[/]"
+                                                                  if path else ""))
+    for note in generated.notes:
+        con.print(f"  [muted]- {escape(note)}[/]")
+
+
+@app.command()
+def testplan(source: Optional[str] = typer.Argument(None, help="GitHub URL, folder or .zip that was analysed "
+                                                                "(default: current project)"),
+             assessment: Optional[str] = typer.Option(None, "--assessment", "-a", help="Assessment ID (prefix)"),
+             project: Optional[str] = typer.Option(None, "--project", "-p"),
+             ref: Optional[str] = typer.Option(None, "--ref"),
+             output: str = typer.Option("routes-testplan.json", "--output", "-o", help="Where to write the plan")):
+    """Generate a build-and-run test plan from the latest source analysis.
+
+    Uses the routes and SQL injection flows found by `routes analyze`. Review
+    and edit the file, then run `routes verify <source> --tests <file>`.
+    """
+    from pathlib import Path
+
+    from routes_core.sources import SourceError, classify
+
+    ctx = _ctx()
+    try:
+        spec = classify(source, ref=ref) if source else None
+        a = actions.source_analysis(ctx, source=spec, assessment=assessment, project=project)
+        generated = actions.generate_test_plan(a)
+    except (SourceError, PlanError) as exc:
+        _fail(str(exc))
+    path = Path(output)
+    path.write_text(json.dumps(generated.plan, indent=2) + "\n", "utf-8")
+    con = _console()
+    con.print(f"[muted]From assessment {a.id[:8]} of {escape(a.project.display_name)}[/]")
+    _print_generated(con, generated, path.resolve())
+
+
 @app.command()
 def verify(source: str = typer.Argument(..., help="GitHub repository URL, local folder or .zip file"),
-           tests: str = typer.Option(..., "--tests", "-t", help="Test plan (JSON) to run against the application"),
+           tests: str = typer.Option(..., "--tests", "-t",
+                                     help="Test plan (JSON) to run, or 'auto' to generate one from the latest "
+                                          "`routes analyze` of this source"),
            patch: Optional[str] = typer.Option(None, "--patch", help="Candidate patch (unified diff) to apply to a "
                                                                      "temporary copy"),
            ref: Optional[str] = typer.Option(None, "--ref", help="Branch, tag or commit for a GitHub source"),
@@ -381,11 +425,17 @@ def verify(source: str = typer.Argument(..., help="GitHub repository URL, local 
     from routes_cli.renderers import buildrun as BR
 
     ctx = _ctx()
+    notice = make_console(plain=as_json or not sys.stderr.isatty() or State.no_animation, stderr=True)
     try:
         spec = classify(source, ref=ref)
-        plan_data = json.loads(Path(tests).read_text("utf-8"))
+        if tests.strip().lower() == "auto":
+            generated = actions.generate_test_plan(actions.source_analysis(ctx, source=spec))
+            plan_data = generated.plan
+            _print_generated(notice, generated, None)
+        else:
+            plan_data = json.loads(Path(tests).read_text("utf-8"))
         patch_text = Path(patch).read_text("utf-8") if patch else None
-    except SourceError as exc:
+    except (SourceError, PlanError) as exc:
         _fail(str(exc))
     except (OSError, ValueError) as exc:
         _fail(f"Could not read the test plan or patch: {exc}")

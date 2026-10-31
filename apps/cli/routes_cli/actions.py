@@ -113,3 +113,53 @@ def _loaded(db, a: Assessment) -> Assessment:
     _ = (a.project, list(a.steps), list(a.findings), list(a.pages), list(a.endpoints), list(a.technologies),
          a.source_result)
     return a
+
+
+# ------------------------------------------------------- generated test plans
+def source_analysis(ctx: Context, *, source: SourceSpec | None = None, assessment: str | None = None,
+                    project: str | None = None) -> Assessment:
+    """The newest finished assessment that includes a source analysis, for a given
+    source (GitHub URL / folder / ZIP), assessment ID or project."""
+    from sqlalchemy import select
+
+    from routes_cli.service import _source_location
+
+    if assessment:
+        a = latest(ctx, assessment=assessment)
+        if a is None or a.source_result is None:
+            raise PlanError(f"Assessment {assessment} has no source analysis.")
+        return a
+    with ctx.session() as db:
+        projects: list[Project] = []
+        if source is not None:
+            location = _source_location(source)
+            projects = list(db.scalars(select(Project).where(Project.source_location == location)))
+        else:
+            ref = project or ctx.config.current_project
+            p = repo.find_project(db, ref) if ref else None
+            if ref and p is None:
+                raise PlanError(f"No project named '{ref}'.")
+            projects = [p] if p else []
+        candidates = []
+        for p in projects:
+            for a in repo.history(db, p, limit=20):
+                if a.status in ("completed", "partially_completed") and a.source_result is not None:
+                    candidates.append(a)
+        if not candidates and source is None and not projects:
+            candidates = [a for a in repo.history(db, None, limit=50)
+                          if a.status in ("completed", "partially_completed") and a.source_result is not None]
+        if not candidates:
+            what = source.label if source is not None else (project or ctx.config.current_project or "any project")
+            raise PlanError(f"No source analysis found for {what}. Run `routes analyze {source.label if source else '<source>'}` "
+                            "first; the test plan is generated from its results.")
+        newest = max(candidates, key=lambda a: a.created_at)
+        return _loaded(db, newest)
+
+
+def generate_test_plan(a: Assessment):
+    from routes_core.testplan import generate
+
+    routes = list((a.source_result.routes if a.source_result else None) or [])
+    findings = [{"type": f.type, "status": f.status, "file": f.file, "line": f.line, "endpoint": f.endpoint,
+                 "method": f.method, "technical_details": f.technical_details or {}} for f in a.findings]
+    return generate(routes, findings)

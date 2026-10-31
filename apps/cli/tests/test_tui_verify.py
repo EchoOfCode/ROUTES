@@ -136,3 +136,21 @@ def test_failed_database_stage_shows_the_psql_error():
     text = failure_detail("database", stages)
     assert "schema.sql" in text and "syntax error" in text
     assert failure_detail("build", {"build": {"log_tail": "a\nb\nType error: x"}}).strip().endswith("Type error: x")
+
+
+async def test_auto_plan_without_an_analysis_explains_what_to_run(engine, fixture_project):
+    app = make_app()
+    async with app.run_test(size=(100, 34)) as pilot:
+        await type_text(pilot, f'/verify "{fixture_project}" --tests auto')
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        assert not isinstance(app.screen, ConfirmModal) and engine.specs == []
+
+
+def test_testplan_command_requires_an_analysis_first(routes_home, tmp_path):
+    from tests.test_commands import invoke
+
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    r = invoke("testplan", str(app_dir), "-o", str(tmp_path / "p.json"))
+    assert r.exit_code == 1 and "routes analyze" in r.output and not (tmp_path / "p.json").exists()

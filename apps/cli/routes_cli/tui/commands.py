@@ -25,7 +25,7 @@ COMMANDS: tuple[Spec, ...] = (
     Spec("analyze", "/analyze <github-url|folder|zip> [--url <website>] [--ref <branch>] [--private]",
          "Analyse source code statically (never executed)", ("--url", "--ref", "--project"), ("--private",),
          ("analyse",)),
-    Spec("verify", "/verify <github-url|folder|zip> --tests <plan.json> [--patch <fix.diff>] [--ref <branch>] "
+    Spec("verify", "/verify <github-url|folder|zip> --tests <plan.json|auto> [--patch <fix.diff>] [--ref <branch>] "
                    "[--approve <pkg,...>] [--private]",
          "Build, run and test an app in a disposable sandbox (patch applied to a copy only)",
          ("--tests", "--patch", "--ref", "--approve"), ("--private",)),

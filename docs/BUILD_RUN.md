@@ -44,6 +44,36 @@ optional `credential_handle`), `patch` (unified diff, ≤ 1 MB), `test_plan`,
 `options` (`timeouts` that may only *lower* the engine's limits, and
 `approved_scripts`) and `requested_by`.
 
+### Generating a test plan
+
+```bash
+routes analyze ./my-app                       # static analysis first (routes + SQL injection flows)
+routes testplan ./my-app -o plan.json         # generate, then review/edit the file
+routes verify ./my-app --tests plan.json      # or skip the file: --tests auto (also /verify ... --tests auto)
+```
+
+`routes_core.testplan.generate` builds the plan from the stored analysis:
+
+* **health:** `/` answers without a server error;
+* **smoke:** every GET route without dynamic segments answers without a 5xx;
+* **security:** for each traced SQL injection flow, using exactly the input the data-flow analysis found (a query
+  parameter, route parameter, JSON body field or header):
+  * a lone quote must not cause a 5xx or leak a PostgreSQL error message (error-based);
+  * a stacked `pg_sleep(3)` must not delay the response beyond 2.5 s (time-based, which also catches injection whose
+    errors are hidden). For ID-like inputs a numeric variant is added.
+
+Payloads never write, drop or change data, and they pass on a correctly parameterised implementation, so the same plan
+checks both the vulnerable code and a fix.
+
+The generator explains what it skipped:
+* inconclusive findings;
+* flows without a known route or input name;
+* dynamic routes, whose valid IDs depend on your data;
+* POST-only routes, whose request bodies are application-specific.
+
+Add tests for these by hand. A passing generated plan is evidence about the probed inputs only, not proof that the
+application has no SQL injection.
+
 ### Test plan
 
 Declarative, validated by `routes_shared.buildrun.TestPlan`. Tests address the

@@ -109,7 +109,9 @@ routes projects
 routes project add ./my-project --name "My Project" --url https://my.site
 routes project use my-project
 routes project show
+routes testplan ./my-app -o plan.json                   # generate a test plan from the latest `routes analyze`
 routes verify ./my-app --tests plan.json [--patch fix.diff] [--json] [-o result.json]
+routes verify ./my-app --tests auto                     # generate the plan on the fly
                                                         # build, run and test in a disposable sandbox (docs/BUILD_RUN.md)
 routes doctor [--quick] [--json]
 routes engine up | status | stop
