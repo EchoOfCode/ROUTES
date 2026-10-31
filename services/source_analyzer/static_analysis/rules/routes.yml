@@ -274,11 +274,22 @@ rules:
     languages: [javascript, typescript]
     severity: INFO
     message: Weak hash algorithm.
-    pattern-either:
-      - pattern: $CRYPTO.createHash("md5")
-      - pattern: $CRYPTO.createHash("sha1")
-      - pattern: createHash("md5")
-      - pattern: createHash("sha1")
+    patterns:
+      - pattern-either:
+          - pattern: $CRYPTO.createHash("md5")
+          - pattern: $CRYPTO.createHash("sha1")
+          - pattern: createHash("md5")
+          - pattern: createHash("sha1")
+      # Password hashing is reported by routes.crypto.password-weak-hash at a
+      # higher severity; without this the same line is reported twice.
+      - pattern-not-inside:
+          patterns:
+            - pattern-either:
+                - pattern: $C.createHash($ALGO).update($SECRET)
+                - pattern: createHash($ALGO).update($SECRET)
+            - metavariable-regex:
+                metavariable: $SECRET
+                regex: (?i).*(password|passwd|pwd|passphrase).*
     metadata:
       routes_type: Weak Cryptography
       routes_title: Outdated hash algorithm
@@ -289,6 +300,109 @@ rules:
       routes_severity: low
       routes_confidence: low
       cwe: CWE-328
+
+  - id: routes.crypto.password-weak-hash
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Password hashed with MD5 or SHA-1.
+    patterns:
+      - pattern-either:
+          - pattern: $C.createHash($ALGO).update($SECRET)
+          - pattern: createHash($ALGO).update($SECRET)
+      - metavariable-regex:
+          metavariable: $ALGO
+          regex: (?i)^["'](md5|sha-?1)["']$
+      - metavariable-regex:
+          metavariable: $SECRET
+          regex: (?i).*(password|passwd|pwd|passphrase).*
+    metadata:
+      routes_type: Weak Cryptography
+      routes_title: Passwords stored with an outdated hash algorithm
+      routes_plain: >-
+        Passwords are hashed with MD5 or SHA-1. Both are fast to compute, so an attacker who obtains the
+        stored hashes can try billions of guesses per second and recover common passwords quickly.
+      routes_recommendation: >-
+        Hash passwords with a deliberately slow, salted algorithm built for the purpose - bcrypt, scrypt
+        or Argon2id. Existing hashes cannot be converted, so re-hash each password at the user's next
+        successful login.
+      routes_severity: high
+      routes_confidence: high
+      cwe: CWE-916
+
+  - id: routes.crypto.weak-jwt-secret
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: JWT signed or verified with a hardcoded or fallback secret.
+    pattern-either:
+      - pattern: $JWT.sign($PAYLOAD, "...", ...)
+      - pattern: $JWT.sign($PAYLOAD, $E || "...", ...)
+      - pattern: $JWT.verify($TOKEN, "...", ...)
+      - pattern: $JWT.verify($TOKEN, $E || "...", ...)
+    metadata:
+      routes_type: Weak Cryptography
+      routes_title: Login tokens signed with a secret written in the code
+      routes_plain: >-
+        The key used to sign login tokens is written in the source code, or falls back to a fixed value
+        when the environment variable is missing. Anyone who can read the repository can mint a valid
+        token for any account.
+      routes_recommendation: >-
+        Read the signing key only from an environment variable with no literal fallback, and fail
+        startup if it is absent. Use a long random value and rotate the one that was committed.
+      routes_severity: high
+      routes_confidence: medium
+      cwe: CWE-798
+
+  - id: routes.crypto.hardcoded-auth-secret
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Auth secret hardcoded or falling back to a literal.
+    patterns:
+      - pattern-either:
+          - pattern: '{..., secret: "...", ...}'
+          - pattern: '{..., secret: $E || "...", ...}'
+      - pattern-not: '{..., secret: "", ...}'
+    metadata:
+      routes_type: Weak Cryptography
+      routes_title: Authentication secret written in the source code
+      routes_plain: >-
+        A configuration object sets its "secret" to a fixed string, or falls back to one when the
+        environment variable is missing. For a session or auth library this secret protects every
+        signed cookie and token, so anyone who can read the code can forge them.
+      routes_recommendation: >-
+        Read the secret only from an environment variable with no literal fallback, and fail startup if
+        it is absent. Rotate the value that was committed; doing so signs out existing sessions.
+      routes_severity: high
+      routes_confidence: medium
+      cwe: CWE-798
+
+  - id: routes.crypto.math-random-token
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Math.random() used to generate a security value.
+    patterns:
+      - pattern-either:
+          - pattern: $NAME = $X
+          - pattern: '{..., $NAME: $X, ...}'
+      - metavariable-pattern:
+          metavariable: $X
+          patterns:
+            - pattern: Math.random()
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i).*(token|secret|key|otp|nonce|password|passwd|salt|session|code)$
+    metadata:
+      routes_type: Weak Cryptography
+      routes_title: Security value generated with a predictable random number
+      routes_plain: >-
+        Math.random() is not built to be unpredictable - it is seeded from values an attacker can often
+        guess, and observing a few outputs can be enough to predict the rest. A token, key or one-time
+        code generated this way can be guessed rather than stolen.
+      routes_recommendation: >-
+        Generate security values with a cryptographic random source: crypto.randomBytes,
+        crypto.randomUUID or crypto.getRandomValues.
+      routes_severity: high
+      routes_confidence: medium
+      cwe: CWE-338
 
   # ---------------------------------------------------------------- XSS
   - id: routes.xss.dangerously-set-inner-html

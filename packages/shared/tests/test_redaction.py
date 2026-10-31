@@ -1,5 +1,6 @@
 from routes_shared.redaction import (
     contains_secret_like,
+    mask_string_literals,
     redact_for_llm,
     redact_structure,
     redact_text,
@@ -125,3 +126,36 @@ def test_redact_for_llm_planted_secrets_corpus_zero_leaks():
         assert secret not in redacted
     assert redacted.count("<SECRET_") >= 4
     assert restore(redacted, placeholder_map) == snippet
+
+
+# ------------------------------------------------- mask_string_literals (S10a)
+
+def test_mask_string_literals_hides_a_positionally_passed_secret():
+    """redact_text() needs a sensitive key name next to the literal; this does not."""
+    code = 'const t = jwt.sign({ sub: "1" }, "hunter2-signing-value");'
+    out = mask_string_literals(code)
+    assert "hunter2-signing-value" not in out
+    assert "jwt.sign" in out and '"1"' in out  # structure and short literals kept
+
+
+def test_mask_string_literals_keeps_module_specifiers_readable():
+    code = 'import jwt from "jsonwebtoken";\nconst c = require("child_process");'
+    out = mask_string_literals(code)
+    assert '"jsonwebtoken"' in out and '"child_process"' in out
+
+
+def test_mask_string_literals_reveals_at_most_four_characters():
+    out = mask_string_literals('const x = "S0meR4ndomP4ssw0rd";')
+    assert "S0me…[redacted]" in out
+    assert "R4ndom" not in out
+
+
+def test_mask_string_literals_handles_quotes_and_escapes():
+    assert "'" in mask_string_literals("const a = 'a-long-enough-value';")
+    out = mask_string_literals(r'const a = "pre\"fix-long-value";')
+    assert "fix-long-value" not in out
+
+
+def test_mask_string_literals_leaves_short_literals_alone():
+    code = 'res.status(404).send("nope");'
+    assert mask_string_literals(code) == code

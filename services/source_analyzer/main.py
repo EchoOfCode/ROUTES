@@ -20,6 +20,7 @@ from source_analyzer.acquisition.github import ImportFailed, download
 from source_analyzer.events import emit, emit_result
 from source_analyzer.profiling.matching import collect as collect_matching
 from source_analyzer.profiling.profile import build_profile
+from source_analyzer.static_analysis.headers import check_security_headers
 from source_analyzer.static_analysis.semgrep_runner import SemgrepFailed, run_semgrep
 from source_analyzer.vuln_classes import VULN_CLASSES, AnalysisContext
 
@@ -84,6 +85,11 @@ def analyse(root: Path, kind: str, target_host: str) -> dict:
     except SemgrepFailed as exc:
         warnings.append(str(exc))
         result["semgrep_failed"] = True
+
+    try:
+        findings.extend(check_security_headers(profile))
+    except Exception:  # noqa: BLE001
+        warnings.append("The security-header check on next.config could not be completed.")
 
     js_files = profile.js_files()
     if profile.framework == "Next.js" and js_files:

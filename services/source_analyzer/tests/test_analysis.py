@@ -15,13 +15,17 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def zip_fixture(name: str, tmp_path: Path, extra: dict[str, str] | None = None) -> Path:
+    """Zip a fixture repo. An `extra` entry replaces a fixture file of the same
+    name rather than being added alongside it (extract_zip rejects duplicates)."""
     root = FIXTURES / name
     path = tmp_path / f"{name}.zip"
+    extra = extra or {}
     with zipfile.ZipFile(path, "w") as zf:
         for f in root.rglob("*"):
-            if f.is_file():
-                zf.write(f, f"{name}-main/{f.relative_to(root).as_posix()}")
-        for rel, content in (extra or {}).items():
+            rel = f.relative_to(root).as_posix() if f.is_file() else None
+            if rel and rel not in extra:
+                zf.write(f, f"{name}-main/{rel}")
+        for rel, content in extra.items():
             zf.writestr(f"{name}-main/{rel}", content)
     return path
 

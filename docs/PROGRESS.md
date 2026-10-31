@@ -1014,3 +1014,177 @@ correct and wires together, but it is not the same as seeing it render.
   in this app, and adding one wasn't asked for).
 - Everything upstream of the UI is still exactly as honestly-scoped as
   before: `SANDBOX_RUNNER_KIND=fake` only, no real LLM calls, SQLi-only.
+
+---
+
+## S10a — A02 detection (misconfiguration / cryptographic failures)
+
+Branch: `feat/remediation-s10a-a02-rules` (off `feat/remediation-loop`).
+
+**Scope note.** S10 is headed "A02 rules, then A01 detector", so this step
+is **detection only**. The new findings are reported and render in the UI
+like any other finding, but none of them get a remediation path: no gate
+entries, no payload list, no snapshot, no "Fix this" button. S9b's API
+already restricts remediation to `rule_id.startswith("routes.sqli")`, so
+these findings cannot reach the loop. The spec's "lookup table of
+known-bad -> known-good fixes, call LLM B only when no entry applies" line
+is remediation-side and is deliberately **not** in this step - it is the
+next one (S10b).
+
+### Files changed
+
+- `services/source_analyzer/static_analysis/rules/routes.yml` — four new
+  rules, plus a suppression on the existing one:
+  - `routes.crypto.password-weak-hash` (new, high/high) — MD5 or SHA-1 fed
+    a password-looking expression. Matches the `.update($SECRET)` chain so
+    it can tell `createHash("md5").update(password)` from
+    `createHash("md5").update(buf)`.
+  - `routes.crypto.weak-jwt-secret` (new, high/medium) — `jwt.sign`/`verify`
+    with a string-literal secret, or `process.env.X || "literal"`.
+  - `routes.crypto.hardcoded-auth-secret` (new, high/medium) — a config
+    object whose `secret:` is a literal or has a literal fallback
+    (NextAuth/session libraries).
+  - `routes.crypto.math-random-token` (new, high/medium) — `Math.random()`
+    assigned to a name ending in token/secret/key/otp/nonce/password/
+    salt/session/code. The `$`-anchored name regex is what keeps
+    `retryDelay`/`sortWeight` out.
+  - `routes.crypto.weak-hash` (existing, unchanged severity) — gained a
+    `pattern-not-inside` for the password case, so password hashing is
+    reported once (by the new high-severity rule) instead of twice.
+- `services/source_analyzer/static_analysis/headers.py` (new) —
+  `check_security_headers(profile)`. Not a Semgrep rule, per the spec:
+  the finding is about something the repo *does not* say, and Semgrep
+  reports matches, not absences. Reads `next.config.*`, and also
+  `middleware.*` because that is the other place projects set headers -
+  without that second read, every project that sets headers in middleware
+  would be a false positive. Reports the missing subset of CSP / HSTS /
+  X-Content-Type-Options / X-Frame-Options / Referrer-Policy; accepts CSP
+  `frame-ancestors` in place of X-Frame-Options. Returns at most one
+  finding, and nothing at all when the framework is not Next.js.
+- `services/source_analyzer/main.py` — calls the header check after
+  Semgrep, in its own `try` so a failure degrades to a warning rather
+  than losing the whole scan (same shape as the snapshot loop).
+- `services/source_analyzer/static_analysis/semgrep_runner.py` — snippet
+  fix, see below.
+- `packages/shared/routes_shared/redaction.py` — new
+  `mask_string_literals()`, see below.
+- `services/source_analyzer/tests/test_analysis.py` — `zip_fixture`'s
+  `extra` now *replaces* a same-named fixture file instead of adding a
+  duplicate zip entry (`extract_zip` rejects duplicates, so overriding
+  `next.config.js` in a test was previously impossible).
+- `services/source_analyzer/tests/test_a02.py` (new) — 18 tests.
+- `packages/shared/tests/test_redaction.py` — 5 tests for the new helper.
+
+### Two bugs found while doing this (both pre-existing, both fixed)
+
+**1. Every Semgrep finding's snippet was the literal string "requires
+login".** Semgrep 1.183 (the image resolves `semgrep>=1.90,<2`) gates
+`extra.lines` behind an account, and `normalise()` read the snippet
+straight from it. Two consequences: the "Code" field in the UI was
+useless for every Semgrep finding, and because a finding's fingerprint is
+`(rule_id, file, snippet)`, two matches of one rule in one file hashed
+identically and the second was silently dropped by the dedup in
+`main.analyse`. Fixed by reading the matched span from disk
+(`matched_lines()`). This is why `test_two_matches_of_one_rule_in_one_file_are_kept_apart`
+exists - without the fix, the two MD5-password sites in one file collapse
+to one finding.
+
+**2. Fixing (1) introduced a secret leak, which the new test caught.**
+With real source in the snippet, a hardcoded credential on the matched
+line now left the sandbox inside it. `redact_text()` did not stop it: it
+masks a literal only when a sensitive-looking *key name* sits next to it,
+so `secret: "committed-auth-value"` was caught but
+`jwt.sign(payload, "hunter2-signing-value")` - positional, no key name -
+was not. `redact_structure()` at the end of `main()` is the same
+matcher, so it did not catch it either, and entropy would not have
+("hunter2-signing-value" is low-entropy). Fixed with
+`mask_string_literals()` in `routes_shared.redaction`: mask the contents
+of any quoted literal of 8+ characters while keeping the surrounding
+code, with an exception for module specifiers (`from "jsonwebtoken"`)
+which are never credentials and whose masking made snippets unreadable.
+Applied to all Semgrep snippets, not just the new rules, since any rule's
+matched line can contain an inline credential. This also replaced the
+offset-based replace-and-verify dance in the `secret: true` path, which
+is now redundant.
+
+### Acceptance (raw output)
+
+```
+$ docker run --rm --user 10001:10001 \
+    -v "$PWD/services/source_analyzer:/srv/source_analyzer:ro" \
+    -v "$PWD/packages/shared/routes_shared:/usr/local/lib/python3.12/site-packages/routes_shared:ro" \
+    --tmpfs /tmp:uid=10001,gid=10001 --tmpfs /home/sandbox:uid=10001,gid=10001 \
+    --tmpfs /work:uid=10001,gid=10001 \
+    -w /srv routes/analyzer:local python -m pytest -q source_analyzer/tests
+..............................................................           [100%]
+62 passed, 1 warning in 10.21s
+```
+62 = the 44 from S9 (unchanged - the "no regression" proof, and it includes
+`test_secrets_are_redacted_everywhere`, which is what confirms the snippet
+change does not leak the fixture's AWS key) + 18 new in `test_a02.py`.
+
+```
+$ docker run --rm -v "$PWD/packages/shared:/pkg:ro" -w /pkg \
+    routes/api:local python -m pytest -q tests
+.........................................................                [100%]
+57 passed, 1 warning in 0.07s
+```
+
+```
+$ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" \
+    -v "$PWD/packages/shared/routes_shared:/usr/local/lib/python3.12/site-packages/routes_shared:ro" \
+    -w /srv -e PYTHONPATH=/srv:/srv/api --entrypoint python migrate -m pytest -q worker/tests
+62 passed, 5 warnings in 1.24s
+
+$ docker compose run --rm --no-deps -v "$PWD/services/api/tests:/srv/api/tests" \
+    -v "$PWD/packages/shared/routes_shared:/usr/local/lib/python3.12/site-packages/routes_shared:ro" \
+    migrate python -m pytest -q tests
+40 passed, 2 warnings in 5.33s
+```
+
+Sandbox isolation untouched, as required:
+```
+$ git diff --stat main -- services/sandbox_manager infrastructure/docker-proxy \
+    infrastructure/network-gateway infrastructure/docker/sandbox-manager.Dockerfile \
+    infrastructure/docker/docker-proxy.Dockerfile infrastructure/docker/gateway.Dockerfile
+(no output)
+```
+
+### Not working / stubbed / assumed
+
+- **The rules were validated against real Semgrep, not just asserted in
+  YAML.** Each one was first prototyped and run inside
+  `routes/analyzer:local` against a file with deliberate positives *and*
+  negatives, then the negatives were kept as tests. What is *not* claimed:
+  no run against a real-world repository, so the false-positive rate on
+  production code is unmeasured. `hardcoded-auth-secret` is the one most
+  likely to over-fire - it matches any object with a literal `secret:`,
+  which need not be an auth secret. It is `confidence: medium` for that
+  reason.
+- **`hardcoded-auth-secret` and `routes.secrets.generic-assignment` both
+  fire on `secret: "literal"`** (different rule_ids, so the dedup does not
+  merge them) - one as "Weak Cryptography / high", one as "Hardcoded
+  Secret / medium". Left as-is deliberately: both statements are true and
+  usefully different. It was not worth contorting the secrets rule to
+  cross-suppress.
+- **The security-header check cannot see a proxy or CDN.** If headers are
+  added by Vercel, Cloudflare or an nginx in front of the app, the
+  repository has no way to show it and the finding is a false positive.
+  Hence `confidence: medium` and an explicit "if a CDN or proxy already
+  sends these, no change is needed" sentence in the recommendation. It
+  also only looks at `next.config.*` and `middleware.*` - headers set
+  per-route in individual handlers are not detected.
+- **`mask_string_literals` costs some snippet readability.** A non-secret
+  literal of 8+ characters (an error message, a SQL fragment, a path) is
+  masked too. Judged the right trade for "nothing leaving the sandbox
+  contains a secret value", but it does mean a snippet is now less
+  readable than the raw line.
+- **Residual leak risk is reduced, not eliminated.** A credential shorter
+  than 8 characters, or one sitting in a comment or an unquoted position
+  on a matched line, is still only covered by `redact_text`'s known
+  formats and key-name matcher. Deterministic masking cannot recognise an
+  arbitrary low-entropy string as a secret.
+- **No A02 remediation.** No gate entries, no known-bad->known-good table,
+  no snapshots for Semgrep-sourced findings (`build_snapshot` is a
+  `VulnClass` method and these findings have no plugin), so A02 findings
+  are report-only. S10b is the fix table.

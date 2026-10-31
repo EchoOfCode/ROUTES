@@ -65,6 +65,31 @@ def contains_secret_like(text: str) -> bool:
     return any(p.search(text) for p in _SECRET_PATTERNS) or bool(_ASSIGNMENT_RE.search(text))
 
 
+_STRING_LITERAL_RE = re.compile(r"""(['"`])((?:\\.|(?!\1)[^\\\n])*)\1""")
+# A module specifier is not a credential, and masking it makes a snippet unreadable.
+_MODULE_SPECIFIER_RE = re.compile(r"(?i)(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(?\s*)$")
+
+
+def mask_string_literals(text: str | None, *, min_length: int = 8) -> str:
+    """Mask the contents of quoted literals, keeping the surrounding code.
+
+    redact_text() only masks a literal when a sensitive-looking key name sits
+    next to it, so it cannot see a secret passed positionally
+    (jwt.sign(payload, "...")). Code snippets are kept for triage, where the
+    structure matters and a long literal almost never does.
+    """
+    if not text:
+        return ""
+
+    def replace(match: re.Match[str]) -> str:
+        quote, value = match.group(1), match.group(2)
+        if len(value) < min_length or _MODULE_SPECIFIER_RE.search(text[: match.start()]):
+            return match.group(0)
+        return f"{quote}{mask_value(value)}{quote}"
+
+    return _STRING_LITERAL_RE.sub(replace, text)
+
+
 def redact_structure(value, *, max_length: int = 400):
     """Recursively redact every string inside a JSON-like structure."""
     if isinstance(value, str):
