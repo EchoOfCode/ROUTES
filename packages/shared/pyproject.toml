@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "routes-shared"
+version = "0.1.0"
+description = "Shared contracts, enums and safety policy for ROUTES services"
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2.7,<3"]
+
+[tool.setuptools.packages.find]
+include = ["routes_shared*"]
