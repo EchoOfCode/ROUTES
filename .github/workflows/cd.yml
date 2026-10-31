@@ -221,7 +221,14 @@ jobs:
   deploy-production:
     name: Deploy to Production (VPS with Manual Approval)
     needs: [build-and-push, deploy-staging]
-    if: github.event.inputs.deploy_env == 'all' || github.event.inputs.deploy_env == 'production' || (github.event_name == 'push' && success())
+    # Runs if staging succeeded OR was intentionally skipped (e.g. deploy_env == 'production').
+    # Blocks production if staging failed or the run was cancelled.
+    # When you enable the push trigger above, also allow: github.event_name == 'push'
+    if: >-
+      ${{ !cancelled()
+      && needs.build-and-push.result == 'success'
+      && (needs.deploy-staging.result == 'success' || needs.deploy-staging.result == 'skipped')
+      && (github.event.inputs.deploy_env == 'all' || github.event.inputs.deploy_env == 'production') }}
     runs-on: ubuntu-latest
     environment:
       name: production
@@ -304,4 +311,3 @@ jobs:
 
             echo \"Production deployment succeeded!\"
           '"
-
