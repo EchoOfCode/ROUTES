@@ -153,4 +153,4 @@ def test_testplan_command_requires_an_analysis_first(routes_home, tmp_path):
     app_dir = tmp_path / "app"
     app_dir.mkdir()
     r = invoke("testplan", str(app_dir), "-o", str(tmp_path / "p.json"))
-    assert r.exit_code == 1 and "routes analyze" in r.output and not (tmp_path / "p.json").exists()
+    assert r.exit_code == 1 and "routes analyze" in " ".join(r.output.split()) and not (tmp_path / "p.json").exists()

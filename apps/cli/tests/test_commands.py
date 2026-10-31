@@ -11,11 +11,14 @@ from typer.testing import CliRunner
 from routes_cli.main import app
 from tests.conftest import SECRET_VALUE, TOKEN
 
-runner = CliRunner()
+runner = CliRunner(env={"COLUMNS": "1000"})
 
 
-def invoke(*args, input=None):
-    return runner.invoke(app, list(args), input=input, catch_exceptions=False)
+def invoke(*args, input=None, env=None):
+    merged_env = {"COLUMNS": "1000"}
+    if env:
+        merged_env.update(env)
+    return runner.invoke(app, list(args), input=input, env=merged_env, catch_exceptions=False)
 
 
 def test_version_and_help_without_tty(routes_home):
@@ -121,7 +124,7 @@ def test_findings_list_detail_json_and_redaction(engine, fixture_project, routes
 def test_reports(engine, fixture_project, routes_home, fmt, name):
     invoke("analyze", str(fixture_project))
     r = invoke("report", "--format", fmt)
-    assert r.exit_code == 0 and name in r.output
+    assert r.exit_code == 0 and name in " ".join(r.output.split())
     path = next(routes_home.joinpath("reports").rglob(name))
     text = path.read_text(encoding="utf-8")
     assert "SQL Injection" in text and SECRET_VALUE not in text
