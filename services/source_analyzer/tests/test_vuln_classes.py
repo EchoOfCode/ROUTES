@@ -20,9 +20,9 @@ def test_each_plugin_satisfies_the_interface():
 
 
 def test_unimplemented_pipeline_stages_raise_not_implemented():
+    # build_snapshot is real as of S4 - see test_snapshot.py. The rest still
+    # await S6/S7.
     for plugin in VULN_CLASSES:
-        with pytest.raises(NotImplementedError):
-            plugin.build_snapshot({}, ctx=None)
         with pytest.raises(NotImplementedError):
             plugin.build_testbench({}, snapshot=None)
         with pytest.raises(NotImplementedError):

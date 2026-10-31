@@ -1,11 +1,13 @@
 """The VulnClass plugin interface.
 
 Each vulnerability class (SQLi, XSS, and whatever is added later) implements
-this once instead of main.py growing a bespoke branch per class. As of S3
-only detect() has a real implementation - it is SqliAnalyzer/XssAnalyzer
-moved behind the interface with no behavior change. The rest of the
-remediation pipeline (snapshot, testbench, fix validation) raises
-NotImplementedError until S4/S6/S7 build real logic for it.
+this once instead of main.py growing a bespoke branch per class. detect() is
+SqliAnalyzer/XssAnalyzer moved behind the interface with no behavior change
+(S3). build_snapshot() (S4) is a real, shared implementation: find the
+smallest tree-sitter function enclosing the finding's line, widened to
+include its export wrapper if any, so the slice stays a valid re-insertable
+unit. The rest of the pipeline (testbench, fix validation) still raises
+NotImplementedError until S6/S7 build real logic for it.
 """
 
 from __future__ import annotations
@@ -13,6 +15,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+from tree_sitter import Node
+
+from source_analyzer.structure.parser import FUNCTION_TYPES, walk
 
 if TYPE_CHECKING:
     from source_analyzer.data_flow.sqli import SqliAnalyzer
@@ -42,12 +48,42 @@ class AnalysisContext:
 
 @dataclass
 class Snapshot:
-    """The data-flow slice sent to LLM A/B. Shape only - built out in S4."""
+    """The data-flow slice sent to LLM A/B: plain code, no LLM involved in
+    producing it (S4)."""
 
     file: str
     start_line: int
     end_line: int
     code: str
+
+
+# Climb at most this many parent levels above a matched function node looking
+# for an export wrapper (covers `export function f(){}` - 1 level - and
+# `export const f = () => {}` - arrow_function -> variable_declarator ->
+# lexical_declaration -> export_statement - 3 levels).
+_MAX_EXPORT_CLIMB = 3
+_EXPORT_CLIMB_THROUGH = ("variable_declarator", "lexical_declaration", "variable_declaration")
+
+
+def _enclosing_function(root: Node, line_no: int) -> Node | None:
+    """The smallest function node (tree-sitter FUNCTION_TYPES) containing
+    `line_no` (1-indexed), widened to its export_statement wrapper if any."""
+    target_row = line_no - 1
+    candidates = [n for n in walk(root) if n.type in FUNCTION_TYPES and n.start_point[0] <= target_row <= n.end_point[0]]
+    if not candidates:
+        return None
+    fn = min(candidates, key=lambda n: n.end_point[0] - n.start_point[0])
+    node = fn
+    for _ in range(_MAX_EXPORT_CLIMB):
+        parent = node.parent
+        if parent is None:
+            break
+        if parent.type == "export_statement":
+            return parent
+        if parent.type not in _EXPORT_CLIMB_THROUGH:
+            break
+        node = parent
+    return fn
 
 
 @dataclass
@@ -87,7 +123,27 @@ class VulnClass(ABC):
         (the shape persisted to SecurityFinding)."""
 
     def build_snapshot(self, finding: dict, ctx: AnalysisContext) -> Snapshot:
-        raise NotImplementedError("Snapshot extraction lands in S4.")
+        """Cut the finding's enclosing function out of its file via
+        tree-sitter. Falls back to just the finding's own line range if no
+        enclosing function is found (e.g. a module-level constant)."""
+        file = finding["file"]
+        if ctx.sqli_analyzer is None or file not in ctx.sqli_analyzer.modules:
+            raise ValueError(f"No parsed module available for {file!r}; cannot build a snapshot.")
+        root = ctx.sqli_analyzer.modules[file].root
+        source = ctx.files[file]
+
+        fn = _enclosing_function(root, finding["line"])
+        if fn is not None:
+            return Snapshot(
+                file=file, start_line=fn.start_point[0] + 1, end_line=fn.end_point[0] + 1,
+                code=source[fn.start_byte:fn.end_byte].decode("utf-8", "replace"),
+            )
+
+        start_line = finding["line"]
+        end_line = finding.get("end_line") or start_line
+        lines = source.decode("utf-8", "replace").splitlines()
+        return Snapshot(file=file, start_line=start_line, end_line=end_line,
+                        code="\n".join(lines[start_line - 1:end_line]))
 
     def build_testbench(self, finding: dict, snapshot: Snapshot) -> Testbench:
         raise NotImplementedError("Testbench generation lands in S7.")

@@ -136,6 +136,65 @@ actual "no behavior change" proof) + 3 new tests in `test_vuln_classes.py`.
   best guess at what S4/S6/S7 will need, not finalized — expect them to grow
   or change shape when those steps are actually implemented.
 
+## S4 — snapshot extraction
+
+**Branch:** `feat/remediation-s4-snapshot` (off `feat/remediation-loop`, which
+now includes S1+S2+S3)
+**Last commit:** not yet committed — pending review
+**Status: DONE**
+
+### Files changed
+- `services/source_analyzer/vuln_classes/base.py` — `VulnClass.build_snapshot()`
+  is now real (was `NotImplementedError`): finds the smallest tree-sitter
+  function node enclosing the finding's line (`_enclosing_function`), widened
+  to its `export_statement` wrapper if present (covers both
+  `export function f(){}` and `export const f = () => {}`), and returns its
+  full source text as the `Snapshot`. Falls back to just the finding's own
+  `line`..`end_line` if no enclosing function exists.
+- `services/source_analyzer/tests/test_snapshot.py` (new) — 4 focused unit
+  tests: cuts the enclosing function (and excludes the sibling function);
+  the export-wrapper-for-const-arrow case; the no-enclosing-function
+  fallback; an unknown file raises `ValueError` rather than fabricating a
+  snapshot.
+- `services/source_analyzer/tests/test_vuln_classes.py` — removed the (now
+  stale) assertion that `build_snapshot` still raises `NotImplementedError`;
+  the other four stage methods are still asserted as unimplemented.
+
+### Scope note
+
+The prompt's S4 wording ("cut the file + line range from the report plus the
+enclosing function") is simpler than the original, now-cancelled M2 spec
+("the function, taint source, sink, and helper functions on the path"). I
+followed the current wording literally: one enclosing function, not a
+multi-function call-chain slice. If a fix later turns out to need visibility
+into a helper function the vulnerable code calls (the SQLi engine already
+tracks this via `via_helper`/`sink_file` for its own reporting), that's a
+gap worth flagging before S6 (fix generation) depends on it.
+
+### Acceptance (raw output)
+
+```
+$ docker run --rm --user 10001:10001 --read-only --tmpfs /tmp:uid=10001,gid=10001 \
+    --tmpfs /home/sandbox:uid=10001,gid=10001 --tmpfs /work:uid=10001,gid=10001 \
+    -w /srv routes/analyzer:local python -m pytest -q source_analyzer/tests
+.........................................                                [100%]
+41 passed, 1 warning in 6.26s
+```
+41 = 37 from S3 (34 unchanged `test_analysis.py` + 3 `test_vuln_classes.py`,
+one of which was corrected above) + 4 new `test_snapshot.py` tests.
+
+### Not working / stubbed / assumed
+
+- Snapshots are **not yet redacted** — `build_snapshot` returns plain source
+  code verbatim. Redaction (`redact_for_llm`, built in S2) has no caller
+  here yet; it gets wired in wherever a snapshot is actually sent to LLM A
+  (S6).
+- No helper-function inclusion (see Scope note above) — single enclosing
+  function only.
+- `build_snapshot` is implemented once on the `VulnClass` base class and
+  inherited by both plugins unchanged, since the extraction logic doesn't
+  differ by vulnerability class — only `detect()` differs per plugin.
+
 ## S1 — migration 0004, LLM A/B config, remove Ollama
 
 **Branch:** `feat/remediation-s1-config` (off `feat/remediation-loop`)
