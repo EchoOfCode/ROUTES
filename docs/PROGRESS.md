@@ -658,3 +658,61 @@ $ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /sr
   enclosing function would get truncated. Matches the existing cap already
   applied to `evidence_summary`/`plain_description`/etc.; not a new
   limitation introduced here.
+
+## S8b — extend the SandboxRunner contract for rescanning
+
+**Branch:** `feat/remediation-s8b-sandbox-contract` (off `feat/remediation-loop`,
+after S8a). Second of three S8 sub-steps.
+**Status: DONE**
+
+### What this adds and why
+
+A gate/verify call (S7) only ever needs the snapshot's one file - the
+testbench's glue imports and calls a single function in isolation, no repo
+needed. A **rescan** is different: it has to run the full detector against
+the *whole* patched tree to check the original finding's fingerprint is
+gone and nothing new appeared (rule 4) - and nothing on the worker side has
+the base repo to build that tree from (same root cause as S8a). So a
+rescan request needs to tell a real backend how to re-fetch the base repo
+itself, using the same import info the original scan already used.
+
+### Files changed
+- `services/worker/sandbox/runner.py` — new `SourceRef` dataclass (`kind`
+  `"github"`/`"zip"` + `owner`/`repo`/`ref`/`upload_id`, mirroring the
+  existing `source` job's own spec shape); `SandboxRunRequest.source_ref`
+  (`None` for a plain gate/verify call); `SandboxRunResult.rescan_fingerprints`
+  (`None` means "not a rescan", never an empty list standing in for "ran and
+  found nothing").
+- `services/worker/sandbox/real.py` — threads `source_ref` into the POSTed
+  spec when present (omitted entirely otherwise); maps
+  `result.rescan_fingerprints` from the (still-speculative) response.
+- `services/worker/sandbox/__init__.py` — export `SourceRef`.
+- `docs/sandbox-contract.md` — documents both new fields, and clarifies
+  what `files` actually means in each of the two call shapes (an isolated
+  single-file payload for gate/verify vs. an overlay patch for a rescan).
+- `services/worker/tests/test_sandbox_runner.py` — `source_ref` omitted
+  when absent / included correctly when present in the POSTed body;
+  `rescan_fingerprints` is `None` when no rescan was requested and mapped
+  correctly when a (hypothetical) response includes it.
+
+### Acceptance (raw output)
+
+```
+$ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /srv \
+    -e PYTHONPATH=/srv:/srv/api --entrypoint python migrate -m pytest -q worker/tests
+.................................................                       [100%]
+49 passed, 3 warnings in 1.16s
+```
+49 = 46 from S7 + 3 new sandbox-contract tests.
+
+### Not working / stubbed / assumed
+
+- **Still entirely speculative on the real-backend side** — same caveat as
+  S5: nothing real implements rescanning yet, so the response-mapping for
+  `rescan_fingerprints` is a guess at a plausible payload shape, not
+  confirmed against anything real.
+- **`FakeSandboxRunner` doesn't need changes for this** — its tests
+  construct `SandboxRunResult(rescan_fingerprints=...)` directly where
+  needed; the dataclass default (`None`) already does the right thing.
+- The loop controller (S8c) is the first actual caller of `source_ref`/
+  `rescan_fingerprints` — nothing uses them yet.

@@ -26,6 +26,20 @@ class SandboxFile:
 
 
 @dataclass
+class SourceRef:
+    """How a real backend can re-fetch the base repo to rescan against -
+    only needed for a rescan (running the full detector on the patched
+    tree), not for a gate/verify call, which operates purely on the
+    snapshot's single file in isolation and needs no repo access at all."""
+
+    kind: str  # "github" | "zip"
+    owner: str | None = None
+    repo: str | None = None
+    ref: str | None = None
+    upload_id: str | None = None
+
+
+@dataclass
 class SandboxRunRequest:
     run_id: str
     finding_id: str
@@ -34,6 +48,9 @@ class SandboxRunRequest:
     testbench: SandboxFile
     timeout_s: int = 30
     memory_mb: int = 256
+    # Set only when this call is a rescan (see SourceRef); omitted for a
+    # plain gate/verify call.
+    source_ref: SourceRef | None = None
 
 
 @dataclass
@@ -52,6 +69,10 @@ class SandboxRunResult:
     stderr: str = ""
     duration_ms: int = 0
     error_reason: str | None = None  # e.g. "missing_stub:pg"
+    # Populated only when the request carried a source_ref (a rescan): every
+    # finding fingerprint detected on the patched tree. None when no rescan
+    # was requested - never an empty list standing in for "not run".
+    rescan_fingerprints: list[str] | None = None
 
 
 class SandboxRunner(ABC):

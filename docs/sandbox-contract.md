@@ -33,10 +33,11 @@ default `fake`), never a code change at any call site.
 | `run_id` | string | Identifies this sandbox run (for logs/correlation). |
 | `finding_id` | string | The finding this run is verifying a fix for. |
 | `round_no` | int | Which round of the remediation loop (1-based). |
-| `files` | list of `{path, content}` | The full working tree to run the testbench against - either the original code or a candidate fix spliced in. |
+| `files` | list of `{path, content}` | **Gate/verify call** (`source_ref` absent): the complete, self-contained content needed to run the testbench in isolation - normally just the snapshot's one file, since the testbench's glue imports and calls a single function. **Rescan call** (`source_ref` present): the patch to overlay on top of the freshly-fetched base repo - the one file that changed, not the whole tree. |
 | `testbench` | `{path, content}` | The test file itself (JS/TS). Frozen before the fix is generated (rule 6) - the same testbench is reused across rounds for a given finding. |
 | `timeout_s` | int | Wall-clock limit for the whole run. |
 | `memory_mb` | int | Memory limit for the whole run. |
+| `source_ref` | `{kind, owner?, repo?, ref?, upload_id?}` or null | **Only set for a rescan.** Tells a real backend how to re-fetch the base repo (same shape as the original scan's import spec: `kind` is `"github"` with `owner`/`repo`/`ref`, or `"zip"` with `upload_id`). Absent for a gate/verify call - those never need the whole repo, only the snapshot's one file. |
 
 ## Output: `SandboxRunResult`
 
@@ -47,6 +48,7 @@ default `fake`), never a code change at any call site.
 | `stdout` / `stderr` | string | Truncated raw output, for the human-review UI and for debugging a rejected/errored run. |
 | `duration_ms` | int | Wall-clock time the run actually took. |
 | `error_reason` | string or null | A short, stable machine-readable reason when `status` is `"error"`/`"timeout"`/`"killed"` - e.g. `"missing_stub:pg"` when the testbench imports something the sandbox has no stub for. The loop uses this to route a finding to `needs_human_review` with a clear, specific reason instead of guessing from raw stderr. |
+| `rescan_fingerprints` | list of string or null | **Only meaningful when the request carried a `source_ref`.** Every finding fingerprint the full detector found on the patched tree - the loop checks the original finding's fingerprint is gone from this list and that nothing new appeared (rule 4). `null` means no rescan was requested, never "ran and found nothing." |
 
 ### `TestResult`
 

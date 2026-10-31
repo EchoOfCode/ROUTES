@@ -41,6 +41,10 @@ class RealSandboxRunner(SandboxRunner):
             "testbench": {"path": request.testbench.path, "content": request.testbench.content},
             "limits": {"timeout_s": request.timeout_s, "memory_mb": request.memory_mb},
         }
+        if request.source_ref is not None:
+            ref = request.source_ref
+            spec["source_ref"] = {"kind": ref.kind, "owner": ref.owner, "repo": ref.repo, "ref": ref.ref,
+                                  "upload_id": ref.upload_id}
         try:
             r = self._client.post("/runs", json=spec)
         except httpx.HTTPError as exc:
@@ -92,4 +96,5 @@ class RealSandboxRunner(SandboxRunner):
         overall = "passed" if tests and all(t.passed for t in tests) else "failed"
         return SandboxRunResult(status=overall, tests=tests, stdout=result.get("stdout", ""),
                                 stderr=result.get("stderr", ""), duration_ms=int(result.get("duration_ms", 0)),
-                                error_reason=result.get("error_reason"))
+                                error_reason=result.get("error_reason"),
+                                rescan_fingerprints=result.get("rescan_fingerprints"))

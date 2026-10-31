@@ -1,6 +1,6 @@
 from worker.sandbox.fake import FakeSandboxRunner, canned_fail, canned_missing_stub, canned_pass, canned_timeout
 from worker.sandbox.real import RealSandboxRunner
-from worker.sandbox.runner import SandboxFile, SandboxRunner, SandboxRunRequest, SandboxRunResult, TestResult
+from worker.sandbox.runner import SandboxFile, SandboxRunner, SandboxRunRequest, SandboxRunResult, SourceRef, TestResult
 
 RUNNER_KINDS = ("fake", "real")
 
@@ -19,6 +19,7 @@ __all__ = [
     "SandboxRunner",
     "SandboxRunRequest",
     "SandboxFile",
+    "SourceRef",
     "SandboxRunResult",
     "TestResult",
     "FakeSandboxRunner",

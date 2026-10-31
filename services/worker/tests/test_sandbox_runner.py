@@ -11,7 +11,7 @@ import httpx
 from worker.sandbox import real as real_module
 from worker.sandbox.fake import FakeSandboxRunner, canned_fail, canned_missing_stub, canned_pass, canned_timeout
 from worker.sandbox.real import RealSandboxRunner
-from worker.sandbox.runner import SandboxFile, SandboxRunRequest
+from worker.sandbox.runner import SandboxFile, SandboxRunRequest, SourceRef
 
 REQUEST = SandboxRunRequest(
     run_id="run-1", finding_id="finding-1", round_no=1,
@@ -86,6 +86,35 @@ def test_real_runner_posts_the_expected_request_shape():
     assert body["limits"] == {"timeout_s": 5, "memory_mb": 256}
 
 
+def test_real_runner_omits_source_ref_when_this_is_not_a_rescan():
+    posted = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        posted.append(json.loads(request.content))
+        return httpx.Response(422, json={"detail": "unsupported kind"})
+
+    runner, request = _runner(handler)
+    runner.run(request)
+
+    assert "source_ref" not in posted[0]
+
+
+def test_real_runner_includes_source_ref_for_a_rescan():
+    posted = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        posted.append(json.loads(request.content))
+        return httpx.Response(422, json={"detail": "unsupported kind"})
+
+    runner, request = _runner(handler)
+    request = SandboxRunRequest(**{**request.__dict__,
+                                    "source_ref": SourceRef(kind="github", owner="acme", repo="shop", ref="main")})
+    runner.run(request)
+
+    assert posted[0]["source_ref"] == {"kind": "github", "owner": "acme", "repo": "shop", "ref": "main",
+                                       "upload_id": None}
+
+
 def test_real_runner_rejection_is_a_graceful_error_not_an_exception():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(422, json={"detail": "unsupported kind"})
@@ -127,6 +156,26 @@ def test_real_runner_maps_a_completed_run_with_tests():
     assert result.status == "passed"
     assert len(result.tests) == 2
     assert result.duration_ms == 95
+    assert result.rescan_fingerprints is None  # no source_ref -> not a rescan
+
+
+def test_real_runner_maps_rescan_fingerprints_when_present():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/runs":
+            return httpx.Response(201, json={"id": "sbx-1", "status": "running"})
+        return httpx.Response(200, json={
+            "id": "sbx-1", "status": "completed",
+            "result": {
+                "tests": [{"name": "exploit rejected", "category": "exploit", "passed": True}],
+                "rescan_fingerprints": ["fp-a", "fp-b"],
+            },
+        })
+
+    runner, request = _runner(handler)
+    request = SandboxRunRequest(**{**request.__dict__, "source_ref": SourceRef(kind="zip", upload_id="u-1")})
+    result = runner.run(request)
+
+    assert result.rescan_fingerprints == ["fp-a", "fp-b"]
 
 
 def test_real_runner_maps_a_completed_run_with_a_failing_test():
