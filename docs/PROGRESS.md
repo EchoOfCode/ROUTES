@@ -1188,3 +1188,173 @@ $ git diff --stat main -- services/sandbox_manager infrastructure/docker-proxy \
   no snapshots for Semgrep-sourced findings (`build_snapshot` is a
   `VulnClass` method and these findings have no plugin), so A02 findings
   are report-only. S10b is the fix table.
+
+---
+
+## S10b — A01 detector (broken access control)
+
+Branch: `feat/remediation-s10b-a01-detector` (off `feat/remediation-loop`).
+
+Built as a third `VulnClass` plugin rather than a bolt-on, which is what
+the spec's wording implies it needs: registering it in `VULN_CLASSES` means
+it inherits `build_snapshot` and `fix_constraints` for free and its findings
+flow through exactly the same path as SQLi's. Still **detection only** -
+see the open decision at the end.
+
+### Files changed
+
+- `services/source_analyzer/data_flow/access_control.py` (new) — the
+  detector. Not a Semgrep rule, because deciding whether a route is
+  protected needs the route map, the handler's AST and the DB interactions
+  already attributed to that handler, none of which a per-file pattern can
+  see. Two rules:
+  - `routes.a01.unprotected-db-route` — the handler reaches the database
+    and calls no recognised NextAuth session helper.
+  - `routes.a01.missing-ownership-check` — the handler *is* authenticated,
+    binds a record id from `params`/`searchParams`/`query`, and no database
+    call in it references the session variable. That is the IDOR shape.
+- `services/source_analyzer/static_analysis/findings.py` — the two finding
+  builders, in the same house style (say what was seen, what it allows,
+  how to fix it, no overstatement).
+- `services/source_analyzer/vuln_classes/a01_plugin.py` (new) —
+  `A01VulnClass`, `rule_prefix = "routes.a01"`.
+- `services/source_analyzer/vuln_classes/__init__.py` — registered third.
+  It has the same ordering dependency as `XssVulnClass`: it needs
+  `SqliVulnClass.detect()` to have populated `ctx.sqli_analyzer`, and it
+  returns `[]` with a warning rather than crashing if it has not.
+- `services/source_analyzer/vuln_classes/base.py` — one-line bug fix, below.
+- `services/source_analyzer/tests/test_a01.py` (new) — 13 tests.
+- `services/source_analyzer/tests/test_snapshot.py` — regression test for
+  the `_enclosing_function` bug.
+- `services/source_analyzer/tests/test_vuln_classes.py` — registry test
+  updated for the third plugin (renamed, it was asserting "exactly sqli
+  then xss").
+
+### Judgement calls worth knowing about
+
+**A public read is not automatically a bug.** An unauthenticated `GET`
+that reads the database may be entirely intentional (a product listing),
+whereas an unauthenticated `DELETE` almost never is. So mutating methods
+report `high`/`medium` and reads report `medium`/`low`, rather than one
+severity for the rule.
+
+**Reading a session is not the same as checking it.** A handler that calls
+`auth()` and ignores the result is not protected. The "protected" set used
+for the worked example additionally requires a rejection-looking token
+(`401`, `403`, `redirect`, ...) in the handler.
+
+**An unresolvable auth helper suppresses the finding rather than
+reporting it.** If `getServerSession(...)` is called but the import cannot
+be tied to NextAuth, the handler is skipped entirely. A missed finding is
+the better error here: reporting "no authentication check" about a handler
+that visibly calls an auth helper would be wrong in a way a developer
+would rightly not forgive.
+
+**The protected sibling goes in `technical_details`, not the snapshot.**
+The spec says "include one protected sibling route in the snapshot", but
+`Snapshot` is a single contiguous slice of one file, and
+`worker.llm.validation.validate_fix` enforces that a candidate fix only
+touches that file and line range. Splicing a second file's handler into
+`snapshot.code` would break that contract. The example is carried as
+`technical_details.protected_example` (file, endpoint, method, session
+variable, code) instead, which is reachable by LLM A's prompt and leaves
+the fix-validation contract intact. Flagging the deviation because it is a
+deviation.
+
+### Bug found and fixed: `_enclosing_function` returned the `function` keyword
+
+`FUNCTION_TYPES` contains `"function"`. In the current tree-sitter JS
+grammar the bare `function` **keyword token** is an anonymous node whose
+`type` is also `"function"`, and `walk()` yields anonymous nodes. Being
+zero rows tall it always won the `min(..., key=height)` search whenever the
+finding's line was a function's signature line - so `build_snapshot`
+returned the single word `function` as the snapshot code. Fixed by
+requiring `n.is_named`.
+
+Why it never showed up before: SQLi and XSS findings point at the *sink*
+line, which is inside the body. Every A01 finding points at the handler's
+signature line, so all of them hit it. Caught by
+`test_a01_findings_carry_a_snapshot_of_their_handler`, and now pinned by
+`test_snapshot_at_a_function_signature_line_is_the_whole_function`.
+
+### Acceptance (raw output)
+
+```
+$ docker run --rm --user 10001:10001 \
+    -v "$PWD/services/source_analyzer:/srv/source_analyzer:ro" \
+    -v "$PWD/packages/shared/routes_shared:/usr/local/lib/python3.12/site-packages/routes_shared:ro" \
+    --tmpfs /tmp:uid=10001,gid=10001 --tmpfs /home/sandbox:uid=10001,gid=10001 \
+    --tmpfs /work:uid=10001,gid=10001 \
+    -w /srv routes/analyzer:local python -m pytest -q source_analyzer/tests
+........................................................................ [ 94%]
+....                                                                     [100%]
+76 passed, 1 warning in 11.52s
+```
+76 = 62 from S10a + 13 in `test_a01.py` + 1 snapshot regression test.
+
+```
+$ ... migrate -m pytest -q worker/tests   -> 62 passed, 5 warnings in 1.21s
+$ ... migrate python -m pytest -q tests   -> 40 passed, 2 warnings in 5.37s
+$ ... routes/api:local -m pytest -q tests -> 57 passed, 1 warning in 0.07s   (packages/shared)
+```
+
+Detector output on the fixture with the A01 test files added - every
+DB-touching route in `nextjs-pg` is genuinely unauthenticated, so this is
+the expected shape rather than a surprise:
+
+```
+A01 findings: 14   (total findings: 28)
+  missing-ownership-check    high   low    GET    /api/invoices/[id]
+  unprotected-db-route       high   medium DELETE /api/invoices/purge
+  unprotected-db-route       high   medium DELETE /api/products/[id]
+  unprotected-db-route       high   medium POST   /api/raw
+  unprotected-db-route       high   medium POST   /api/users
+  unprotected-db-route       medium low    GET    /api/constant
+  unprotected-db-route       medium low    GET    /api/invoices
+  unprotected-db-route       medium low    GET    /api/legacy
+  unprotected-db-route       medium low    GET    /api/limit
+  unprotected-db-route       medium low    GET    /api/products/[id]
+  unprotected-db-route       medium low    GET    /api/report
+  unprotected-db-route       medium low    GET    /api/safe
+  unprotected-db-route       medium low    GET    /api/search
+  unprotected-db-route       medium low    GET    /api/sort
+```
+
+### Not working / stubbed / assumed
+
+- **This will be noisy on an app with no auth.** 14 of 28 findings on the
+  fixture are A01. That is the detector being right about a demo app, but
+  on a real repository every public endpoint is a false positive, which is
+  why reads are `confidence: low`. Not measured against a real-world repo.
+- **NextAuth only, as specified.** Clerk, Supabase, Lucia, Auth0 and
+  hand-rolled session checks are not recognised, so a project using them
+  reads as entirely unprotected. `AUTH_HELPERS` is where another library
+  would be added.
+- **Protection via `middleware.ts` is not recognised.** Next.js projects
+  very commonly protect whole route trees in middleware with a matcher.
+  Those handlers contain no auth call and are reported as unprotected.
+  This is the single biggest false-positive source and is not handled -
+  it needs matcher-pattern evaluation against each route's path.
+- **Ownership detection is textual at the query boundary.** It checks
+  whether the database call's own text mentions the session variable and
+  reaches an identifying field. A handler that fetches the row and then
+  compares ownership in JavaScript afterwards is reported, even though it
+  is (weakly) correct. A handler that passes `session.user.id` through an
+  intermediate variable before the query may be missed - there is no taint
+  tracking from session to query, unlike the request-to-sink direction.
+- **`_request_id_name` only recognises ids bound by a declaration.**
+  `pool.query(..., [params.id])` used inline, with no intermediate
+  variable, is not matched.
+- **No remediation for A01, and this is an open decision.** The S10 spec's
+  A01 text mentions `needs_human_review` when no owner column is found and
+  names three testbench behaviours (no-session rejected, other-user
+  rejected, owner still allowed), which implies A01 *should* get a
+  remediation path. It does not have one yet: `SUPPORTED_RULE_PREFIXES` in
+  `services/api/app/api/remediations.py` is still `("routes.sqli",)`, so
+  no "Fix this" button appears for these findings. The pieces that exist:
+  snapshots are built, and `technical_details.protected_example` is there
+  precisely so a fix can copy the project's own auth pattern. What is
+  missing: the three assertions as a testbench, gate entries, and the
+  owner-column -> `needs_human_review` branch. Also still open from S10a:
+  the spec's known-bad -> known-good fix table, which is the other
+  remediation-side item.

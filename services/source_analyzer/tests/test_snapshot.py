@@ -11,6 +11,7 @@ import pytest
 from source_analyzer.data_flow.sqli import Module, SqliAnalyzer
 from source_analyzer.structure.parser import parse
 from source_analyzer.vuln_classes import AnalysisContext, SqliVulnClass
+from source_analyzer.vuln_classes.base import _enclosing_function
 
 SOURCE = b"""
 export async function GET(request) {
@@ -111,3 +112,18 @@ def test_build_snapshot_unknown_file_raises_instead_of_fabricating_a_snapshot():
 
     with pytest.raises(ValueError):
         SqliVulnClass().build_snapshot(finding, ctx)
+
+
+def test_snapshot_at_a_function_signature_line_is_the_whole_function():
+    """Regression: the anonymous `function` keyword token has type "function",
+    which is in FUNCTION_TYPES, and spans zero rows - so it used to win the
+    smallest-enclosing-function search whenever the finding's line was the
+    signature line (every A01 finding) and the snapshot came back as the
+    single word "function"."""
+    source = b'export default function handler(req, res) {\n  res.end("ok");\n}\n'
+    root = parse("pages/api/legacy.js", source).root_node
+    fn = _enclosing_function(root, 1)
+    assert fn is not None
+    code = source[fn.start_byte:fn.end_byte].decode()
+    assert code.startswith("export default function handler")
+    assert 'res.end("ok")' in code

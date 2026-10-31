@@ -69,7 +69,12 @@ def _enclosing_function(root: Node, line_no: int) -> Node | None:
     candidate - such a function has no name and isn't independently
     reinsertable, so it would make a useless snapshot."""
     target_row = line_no - 1
-    candidates = [n for n in walk(root) if n.type in FUNCTION_TYPES and n.start_point[0] <= target_row <= n.end_point[0]]
+    # is_named excludes the anonymous `function` *keyword* token, whose type is
+    # also "function" and which, being zero rows tall, would otherwise always
+    # win min() for a line that holds a function signature.
+    candidates = [n for n in walk(root)
+                  if n.is_named and n.type in FUNCTION_TYPES
+                  and n.start_point[0] <= target_row <= n.end_point[0]]
     if not candidates:
         return None
     standalone = [n for n in candidates if n.parent is None or n.parent.type != "arguments"]

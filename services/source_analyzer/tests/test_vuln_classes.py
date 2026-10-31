@@ -4,14 +4,15 @@ itself is unchanged and still covered end-to-end by test_analysis.py."""
 import pytest
 
 from routes_shared.remediation import Snapshot
-from source_analyzer.vuln_classes import VULN_CLASSES, SqliVulnClass, XssVulnClass
+from source_analyzer.vuln_classes import A01VulnClass, VULN_CLASSES, SqliVulnClass, XssVulnClass
 from source_analyzer.vuln_classes.base import VulnClass
 
 
-def test_registry_contains_exactly_sqli_then_xss():
-    assert len(VULN_CLASSES) == 2
+def test_registry_runs_sqli_first_because_the_others_depend_on_it():
+    assert len(VULN_CLASSES) == 3
     assert isinstance(VULN_CLASSES[0], SqliVulnClass)
     assert isinstance(VULN_CLASSES[1], XssVulnClass)
+    assert isinstance(VULN_CLASSES[2], A01VulnClass)
 
 
 def test_each_plugin_satisfies_the_interface():
