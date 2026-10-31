@@ -89,6 +89,8 @@ jobs:
           context: .
           file: infrastructure/docker/worker.Dockerfile
           push: true
+          build-args: |
+            BASE_IMAGE=${{ env.IMAGE_PREFIX }}/routes-api:${{ github.sha }}
           tags: |
             ${{ env.IMAGE_PREFIX }}/routes-worker:${{ github.sha }}
             ${{ env.IMAGE_PREFIX }}/routes-worker:latest

@@ -1,6 +1,7 @@
 # ROUTES background worker (RQ). Has no Docker access: sandboxes are requested
 # from the Sandbox Manager over HTTP. Build context: repo root.
-FROM routes/api:local
+ARG BASE_IMAGE=routes/api:local
+FROM ${BASE_IMAGE}
 
 USER 0
 COPY services/worker /srv/worker

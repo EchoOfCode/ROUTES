@@ -67,6 +67,20 @@ jobs:
   test-python:
     name: Test & Coverage (Python)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: routes_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -83,6 +97,8 @@ jobs:
           pip install -e packages/shared -e packages/core -e packages/storage -e apps/cli -e "services/api[test]" pytest pytest-cov pytest-asyncio
 
       - name: Run pytest with test coverage
+        env:
+          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/routes_test
         run: |
           pytest -q \
             --cov=routes_shared \
@@ -159,7 +175,7 @@ jobs:
         working-directory: apps/web
         run: |
           bun install --frozen-lockfile
-          bun pm audit
+          bun audit
 
   docker-build-smoke:
     name: Docker Build Smoke Test
