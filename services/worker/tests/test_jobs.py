@@ -1,19 +1,12 @@
 """Assessment lifecycle tests for worker jobs (fake Sandbox Manager, real PostgreSQL)."""
 
-import os
-import subprocess
-import sys
 import uuid
-from pathlib import Path
 
-_base = os.environ["DATABASE_URL"].rsplit("/", 1)[0]
-os.environ["DATABASE_URL"] = f"{_base}/routes_test"
+import pytest
+from sqlalchemy import select, text
 
-import pytest  # noqa: E402
-from sqlalchemy import select, text  # noqa: E402
-
-from app.core.db import get_engine, get_sessionmaker  # noqa: E402
-from app.models import (  # noqa: E402
+from app.core.db import get_engine, get_sessionmaker
+from app.models import (
     Assessment,
     AssessmentJob,
     Base,
@@ -25,8 +18,8 @@ from app.models import (  # noqa: E402
     SourceAnalysisResult,
     User,
 )
-from app.services import lifecycle, queueing  # noqa: E402
-from worker.jobs import common, discovery, results, source  # noqa: E402
+from app.services import lifecycle, queueing
+from worker.jobs import common, discovery, results, source
 
 DISCOVERY_RESULT = {
     "target_url": "https://example.com/", "hostname": "example.com", "reachable": True,
@@ -81,13 +74,6 @@ class FakeManager:
         pass
 
 
-@pytest.fixture(scope="session", autouse=True)
-def database():
-    with get_engine().begin() as conn:
-        conn.execute(text("DROP SCHEMA public CASCADE; CREATE SCHEMA public;"))
-    subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=Path("/srv/api"), check=True)
-
-
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
     FakeManager.runs.clear()
@@ -103,12 +89,6 @@ def env(monkeypatch):
     tables = ", ".join(t.name for t in reversed(Base.metadata.sorted_tables))
     with get_engine().begin() as conn:
         conn.execute(text(f"TRUNCATE {tables} CASCADE"))
-
-
-@pytest.fixture
-def db():
-    with get_sessionmaker()() as s:
-        yield s
 
 
 def make_assessment(db, *, with_source=True, match="confirmed"):

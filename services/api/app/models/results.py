@@ -97,6 +97,7 @@ class SecurityFinding(IdMixin, TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     file: Mapped[str | None] = mapped_column(String(2048))
     line: Mapped[int | None] = mapped_column(Integer)
+    end_line: Mapped[int | None] = mapped_column(Integer)
     endpoint: Mapped[str | None] = mapped_column(String(2048))
     method: Mapped[str | None] = mapped_column(String(16))
     rule_id: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -105,6 +106,7 @@ class SecurityFinding(IdMixin, TimestampMixin, Base):
     technical_details: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     recommendation: Mapped[str] = mapped_column(Text, nullable=False)
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    snapshot: Mapped[dict | None] = mapped_column(JSONB)
 
     __table_args__ = (
         UniqueConstraint("assessment_id", "fingerprint", name="uq_security_findings_assessment_fingerprint"),

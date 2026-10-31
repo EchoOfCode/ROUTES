@@ -16,13 +16,21 @@ from app.core.config import get_settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-QUEUES = ("discovery", "source", "results")
+QUEUES = ("discovery", "source", "results", "remediate")
 
 
 def main(argv: list[str]) -> int:
     names = [n for n in argv if n in QUEUES] or list(QUEUES)
     connection = Redis.from_url(get_settings().redis_url)
     queues = [Queue(name, connection=connection) for name in names]
+    if "remediate" in names:
+        # Publish remediation jobs staged in the outbox while Redis or the
+        # workers were unavailable (e.g. runs recovered at startup).
+        from app.core.db import get_sessionmaker
+        from app.services import outbox
+
+        with get_sessionmaker()() as db:
+            outbox.relay_safely(db)
     Worker(queues, connection=connection).work(with_scheduler=True)
     return 0
 

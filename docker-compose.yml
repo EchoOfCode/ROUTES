@@ -79,6 +79,7 @@ services:
     environment: *api-env
     volumes:
       - uploads:/data/uploads
+      - remediation_artifacts:/data/artifacts
     networks: [backend]
     depends_on:
       postgres: { condition: service_healthy }
@@ -92,6 +93,7 @@ services:
     environment: *api-env
     volumes:
       - uploads:/data/uploads
+      - remediation_artifacts:/data/artifacts
     networks: [backend, frontend]
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
@@ -130,6 +132,41 @@ services:
     networks: [backend]
     depends_on:
       worker-discovery: { condition: service_started }
+    restart: unless-stopped
+
+  # Remediation is the only worker with internet access: it calls external
+  # LLM APIs directly (never from a sandbox). discovery/source stay fully
+  # internal, as before.
+  worker-remediate:
+    profiles: ["web"]
+    image: routes/worker:local
+    <<: *hardening
+    tmpfs: ["/tmp:size=64m"]
+    command: ["python", "-m", "worker.queues.run_worker", "remediate"]
+    environment:
+      <<: *api-env
+      LLM_A_ENDPOINT: ${LLM_A_ENDPOINT:-https://api.groq.com/openai/v1/chat/completions}
+      LLM_A_API_KEY: ${LLM_A_API_KEY:-}
+      LLM_A_MODEL: ${LLM_A_MODEL:-llama-3.3-70b-versatile}
+      LLM_B_ENDPOINT: ${LLM_B_ENDPOINT:-https://openrouter.ai/api/v1/chat/completions}
+      LLM_B_API_KEY: ${LLM_B_API_KEY:-}
+      LLM_B_MODEL: ${LLM_B_MODEL:-qwen/qwen-2.5-coder-32b-instruct:free}
+      LLM_CACHE_MODE: ${LLM_CACHE_MODE:-live}
+      LLM_CACHE_DIR: ${LLM_CACHE_DIR:-/tmp/llm_cache}
+      SANDBOX_RUNNER_KIND: ${SANDBOX_RUNNER_KIND:-fake}
+      BATCH_SIZE: ${BATCH_SIZE:-8}
+      LLM_CONCURRENCY: ${LLM_CONCURRENCY:-4}
+      MAX_ROUNDS: ${MAX_ROUNDS:-3}
+      STAGNATION_ROUNDS: ${STAGNATION_ROUNDS:-2}
+      REMEDIATION_TOKEN_BUDGET: ${REMEDIATION_TOKEN_BUDGET:-8000}
+      REMEDIATION_ARTIFACT_RETENTION_DAYS: ${REMEDIATION_ARTIFACT_RETENTION_DAYS:-30}
+      REMEDIATION_RETAIN_MODEL_IO: ${REMEDIATION_RETAIN_MODEL_IO:-true}
+    volumes:
+      - remediation_artifacts:/data/artifacts
+    networks: [backend, egress]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
     restart: unless-stopped
 
   web:
@@ -311,3 +348,7 @@ volumes:
   redis_data: {}
   uploads:
     name: routes_uploads
+  # Private remediation artifacts (redacted context, model I/O, patches,
+  # logs). Never mounted into a sandbox.
+  remediation_artifacts:
+    name: routes_remediation_artifacts

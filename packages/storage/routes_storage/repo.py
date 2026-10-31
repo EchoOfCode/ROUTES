@@ -167,7 +167,10 @@ def save_source(db: Session, assessment: Assessment, records: SourceRecords) -> 
     db.add(SourceResultRow(assessment_id=assessment.id, **records.analysis))
     ordered = sorted(records.findings, key=lambda f: (SEVERITY_ORDER.get(f["severity"], 9), f["file"] or "", f["line"] or 0))
     for i, f in enumerate(ordered, start=1):
-        db.add(Finding(assessment_id=assessment.id, seq=i, **f))
+        # The CLI never stores source code: the remediation snapshot and line
+        # range are web-stack-only fields.
+        kept = {k: v for k, v in f.items() if k not in ("snapshot", "end_line")}
+        db.add(Finding(assessment_id=assessment.id, seq=i, **kept))
     for t in records.technologies:
         db.add(Technology(assessment_id=assessment.id, **t))
     for e in records.endpoints:
