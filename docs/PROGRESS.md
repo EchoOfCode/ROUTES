@@ -716,3 +716,107 @@ $ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /sr
   needed; the dataclass default (`None`) already does the right thing.
 - The loop controller (S8c) is the first actual caller of `source_ref`/
   `rescan_fingerprints` — nothing uses them yet.
+
+## S8c — the loop controller
+
+**Branch:** `feat/remediation-s8c-loop-controller` (off `feat/remediation-loop`,
+after S8b). Third and last of three S8 sub-steps. `services/worker/jobs/remediate.py`
+is no longer the M0 no-op stub as of this step.
+**Status: DONE**
+
+### Design recap (agreed before building)
+
+Scoped to **one finding per job**, not the spec's cross-finding batching -
+agreed explicitly before starting (see S8's design note above). "The number
+of open findings hasn't dropped for 2 rounds" (a multi-finding stop rule)
+is adapted to single-finding granularity as **oscillation**: the same
+candidate fix (by normalized-code hash) repeating `STAGNATION_ROUNDS` times
+in a row ends the loop early, not after burning all `MAX_ROUNDS`.
+
+### Files changed
+- `services/worker/loop.py` (new) — `run_remediation_loop(...)`: establishes
+  the testbench once (LLM A, gated via S7, regenerating up to 2 more times
+  on gate failure), then per round calls LLM B, verifies the candidate in
+  the sandbox, rescans, and checks rule 4's success condition exactly
+  (verify passed, original fingerprint gone, no new one appeared). Stops on
+  success, oscillation, or `MAX_ROUNDS`.
+- `services/worker/llm/llm_b.py` — `call_llm_b` gained an optional
+  `previous_failure` parameter: redacted (same `redact_for_llm` discipline
+  as everything else sent to an external LLM) and merged into the next
+  round's prompt as "the previous attempt failed: ...".
+- `services/worker/jobs/remediate.py` — replaced the M0 no-op stub:
+  fetches the finding + its persisted snapshot (S8a), builds the two
+  `LLMClient`s and the `SandboxRunner` from config, builds a `SourceRef`
+  from the project's `ProjectIntegration` (S8b), computes
+  `baseline_fingerprints` from the assessment's current findings, runs the
+  loop, and persists every round as a `RemediationIteration` row.
+- `services/worker/tests/test_loop.py` (new) — 7 scenarios against fake LLM
+  transports and a scripted `FakeSandboxRunner`: fixed on try 1, fixed on
+  try 2 after feedback, exhausts `MAX_ROUNDS` cleanly (not a hang), rescan
+  still showing the original fingerprint counts as not-fixed, a new
+  fingerprint appearing counts as not-fixed, the gate never passing ends in
+  `needs_human_review` before any round runs, and oscillation stops early.
+- `services/worker/tests/test_remediate_job.py` — rewritten for the real
+  job: fixes a finding and persists the iteration correctly; `needs_human_review`
+  when there's no snapshot or no source reference; idempotent on a
+  re-delivered already-terminal job. Monkeypatches `remediate.LLMClient`/
+  `remediate.build_sandbox_runner` the same way `test_jobs.py` already
+  monkeypatches `ManagerClient` for discovery/source - an established
+  pattern in this codebase, not a new one.
+
+### Two real test-fixture bugs caught while writing this (not loop bugs)
+
+Both surfaced as the loop correctly rejecting my own test setup:
+1. My candidate-code variants across rounds differed only in a *comment*
+   (`// attempt N`). `_candidate_hash` normalizes comments away before
+   hashing (intentionally, so real reformatting doesn't look like a new
+   candidate) - so all "different" attempts hashed identically and
+   falsely tripped oscillation. Fixed by varying actual code
+   (`const _attempt = N;`), not a comment.
+2. A "fully fixed" test scripted a rescan returning `["other-fp"]` - a
+   fingerprint not in the (empty) baseline. Rule 4 correctly flagged that
+   as a *new* finding, since nothing marked it as pre-existing. Fixed the
+   fixture to return `[]` (nothing left) for "fully fixed" scenarios.
+
+### Acceptance (raw output)
+
+```
+$ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /srv \
+    -e PYTHONPATH=/srv:/srv/api --entrypoint python migrate -m pytest -q worker/tests
+...........................................................              [100%]
+59 passed, 5 warnings in 1.20s
+
+$ docker compose run --rm --no-deps -v "$PWD/services/api/tests:/srv/api/tests" migrate python -m pytest -q tests
+................................                                         [100%]
+32 passed, 2 warnings in 4.44s
+```
+59 worker tests = 49 from S8b + 7 new `test_loop.py` + 3 net new in
+`test_remediate_job.py` (grew from 1 test to 4).
+
+### Not working / stubbed / assumed
+
+- **Still never touches a real LLM or a real sandbox** — every test uses
+  `httpx.MockTransport` and `FakeSandboxRunner`. `SANDBOX_RUNNER_KIND=fake`
+  is still the only functional setting end to end.
+- **Zip-sourced assessments have no persisted `upload_id`** to rescan
+  against later — only `filename`/`sha256` survive on `ProjectIntegration`;
+  the original upload's directory (named by a UUID generated at upload
+  time) isn't kept anywhere retrievable. `_source_ref()` returns
+  `SourceRef(kind="zip", upload_id=None)` for these - visibly incomplete,
+  not silently wrong. Needs a retention-policy decision (keep zips around,
+  keyed by hash?) before zip-sourced rescanning can ever work for real.
+  GitHub-sourced assessments are fine - `owner`/`repo`/`ref` persist on
+  `ProjectIntegration` already.
+- **`FindingRemediationStatus.RETRYING` is unused.** There's no
+  intermediate per-round status surfaced at the `Remediation` row level -
+  only the final outcome (`FIXED`/`NEEDS_HUMAN_REVIEW`/open-on-error) is
+  recorded; per-round detail lives in `RemediationIteration` rows instead.
+  Worth revisiting whether `RETRYING` has a real purpose (e.g. a live
+  "in progress" indicator for the UI, S9) or should be dropped.
+- **No actual rescanning happens** regardless of what the loop asks for -
+  `FakeSandboxRunner` returns whatever was scripted; a real backend to
+  fulfill `source_ref`/`rescan_fingerprints` still doesn't exist (S8b's
+  caveat, unchanged).
+- Still SQLi-only in practice: the gate's known-bad-fix library (S7) and
+  the fixed exploit-payload list (S6b) are both SQLi-only, so XSS findings
+  would reach the loop but the gate's second check is a no-op for them.
