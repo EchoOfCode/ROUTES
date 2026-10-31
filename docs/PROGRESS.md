@@ -943,3 +943,74 @@ already depending on it) + 8 new remediation-endpoint tests.
   returns all of them; fine given `MAX_ROUNDS=5` caps the count hard, not
   designed to scale beyond that.
 - Still nothing in `apps/web` calls any of this — that's S9c.
+
+## S9c — UI
+
+**Branch:** `feat/remediation-s9c-ui` (off `feat/remediation-loop`, after S9b).
+Third and last of three S9 sub-steps. S9 is now fully complete.
+**Status: DONE**
+
+### Files changed
+- `apps/web/lib/api.ts` — `Finding` gains `end_line`, `fingerprint`, `snapshot`
+  (matching S9b's `FindingOut` extension, previously invisible to the
+  frontend); new `Remediation`/`RemediationIteration`/`RemediationStatus`
+  types.
+- `apps/web/components/app/status.tsx` — `RemediationStatusTag`, following
+  the existing `StatusBadge`/`FindingStatusTag` pattern exactly (same
+  dot+spin shape, same color tokens - `text-warn` for
+  `needs_human_review`).
+- `apps/web/components/app/remediation-panel.tsx` (new) — the actual
+  feature: a "Fix this" button (shown only for a SQLi finding with a
+  snapshot, matching the API's own restriction so the UI never offers what
+  the backend would reject), a round-by-round timeline (reusing
+  `progress-panel.tsx`'s step-icon visual pattern), a cancel button while
+  active, and a before/after code block once fixed. No diff library exists
+  in this app (confirmed in an earlier audit) and none was added - the
+  "diff" is two labeled, non-interactive code blocks side by side, not a
+  line-level diff algorithm.
+- `apps/web/components/app/findings-list.tsx` — renders `<RemediationPanel>`
+  inside the existing inline finding-detail view.
+
+### Verification
+
+```
+$ docker run --rm -v "$PWD/apps/web:/src" -w /src oven/bun:1 sh -c "bun install && bun run typecheck"
+$ tsc --noEmit                                                     (clean, no output)
+
+$ docker run --rm -v "$PWD/apps/web:/src" -w /src oven/bun:1 bun run lint
+$ eslint .                                                          (clean, no output)
+
+$ docker run --rm -v "$PWD/apps/web:/src" -w /src oven/bun:1 bun run build
+✓ Compiled successfully, ✓ Generating static pages (13/13)
+```
+
+**Not browser-verified.** Per the project's own testing guidance, a UI
+change should be clicked through in a running browser before calling it
+done - this wasn't done here. Two reasons, stated plainly rather than used
+as an excuse: (1) no real `LLM_A_API_KEY`/`LLM_B_API_KEY` are configured
+(S6 left them blank on purpose), so an actual "Fix this" click would just
+fail against Groq/OpenRouter with an auth error - it wouldn't exercise
+anything beyond what `test_remediations.py`/`test_loop.py` already cover
+with fakes; (2) standing up the full stack with a seeded, snapshot-bearing
+finding to click through is a meaningful amount of setup for what's left
+to verify (conditional rendering of the button, the timeline, the diff
+layout). Typecheck/lint/build passing is real signal that the code is
+correct and wires together, but it is not the same as seeing it render.
+
+### Not working / stubbed / assumed
+
+- **No persistent "a remediation already exists" indicator across page
+  reloads.** The UI only knows about a remediation once it starts one in
+  that browser session (`remediationId` is local component state). If the
+  backend already has an active/past remediation for a finding (e.g. from
+  a previous session) and the page reloads, the UI shows the plain "Fix
+  this" button again - clicking it is still safe (S9b's idempotency
+  returns the existing active one rather than duplicating), but a finished
+  remediation's history would be invisible until re-triggered. Fixing this
+  would need a "list remediations for a finding" endpoint, not built since
+  it wasn't asked for.
+- **The before/after view is two static code blocks, not a real diff** -
+  no line-level highlighting of what changed, by design (no diff library
+  in this app, and adding one wasn't asked for).
+- Everything upstream of the UI is still exactly as honestly-scoped as
+  before: `SANDBOX_RUNNER_KIND=fake` only, no real LLM calls, SQLi-only.
