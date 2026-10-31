@@ -2,7 +2,15 @@
 receive and (b) the testbench glue code - in a single call, never shown the
 real secret values (rule 1), with its own output redacted again before it is
 used anywhere downstream (pipeline step 4: LLM A's output could itself echo
-something sensitive back)."""
+something sensitive back).
+
+Rule 5, relaxed: LLM A still writes the testbench from the report and
+snapshot, but its prompt must include a short fixed list of known exploit
+payloads for the finding's vuln class (routes/worker/llm/payloads.py) - "must
+include these, may add more based on the report." No assembly code and no
+enforcement beyond the prompt; that is a deliberate, narrower scope than the
+original "payloads never chosen by an LLM" wording.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +21,7 @@ from routes_shared.redaction import redact_for_llm
 from routes_shared.remediation import Snapshot
 
 from worker.llm.client import LLMClient, LLMError
+from worker.llm.payloads import payloads_for
 
 SYSTEM_PROMPT = (
     "You are a security engineer preparing a fix request for another engineer. "
@@ -39,12 +48,22 @@ class LlmAResult:
 
 def call_llm_a(client: LLMClient, finding: dict, snapshot: Snapshot) -> LlmAResult:
     redacted_code, snapshot_map = redact_for_llm(snapshot.code)
+    payloads = payloads_for(finding.get("rule_id", ""))
+    payload_instruction = ""
+    if payloads:
+        payload_list = "\n".join(f"- {p!r}" for p in payloads)
+        payload_instruction = (
+            f"\n\nKnown exploit payloads for this vulnerability class - your exploit "
+            f"tests must include at least these; you may add more based on the "
+            f"specific report:\n{payload_list}"
+        )
     user_prompt = (
         f"Finding: {finding.get('title')}\n"
         f"Rule: {finding.get('rule_id')}\n"
         f"Why it's a problem: {finding.get('plain_description')}\n"
         f"File: {snapshot.file}, lines {snapshot.start_line}-{snapshot.end_line}\n\n"
         f"Redacted code snapshot:\n```\n{redacted_code}\n```"
+        f"{payload_instruction}"
     )
     raw = client.complete([
         {"role": "system", "content": SYSTEM_PROMPT},

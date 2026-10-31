@@ -327,6 +327,59 @@ $ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /sr
   yet — that's S8 (loop controller). `services/worker/jobs/remediate.py` is
   still the M0 no-op stub.
 
+## S6b — fixed exploit-payload list for LLM A's prompt (rule 5, relaxed)
+
+**Branch:** `feat/remediation-s6b-payloads` (off `feat/remediation-loop`, after S6)
+**Status: DONE**
+
+Caught via the user's own question, not by me: S6's `llm_a.py` asked LLM A
+to write "exploit-payload tests" without ever telling it what payload to
+use — meaning the LLM was choosing the attack string itself, which rule 5
+("Attack payloads come from fixed lists in code, never chosen by an LLM")
+explicitly forbids. The user relaxed rule 5 rather than have me build the
+originally-stricter version: LLM A still writes the whole testbench from
+the report and snapshot (unchanged from S6); the fix is only that its
+prompt now includes a fixed 3-5 item payload list per vuln class and says
+"must include these, may add more based on the report." No assembly code,
+no enforcement beyond the prompt text — explicitly out of scope per the
+user's instruction.
+
+### Files changed
+- `services/worker/llm/payloads.py` (new) — `KNOWN_EXPLOIT_PAYLOADS` (SQLi: 3
+  payloads, XSS: 3 payloads) and `payloads_for(rule_id)`.
+- `services/worker/llm/llm_a.py` — `call_llm_a` now looks up the finding's
+  payload list and appends a "must include at least these" instruction to
+  LLM A's user prompt when one exists for the rule.
+- `services/worker/llm/__init__.py` — export the new names.
+- `services/worker/tests/test_llm_payloads.py` (new) — list sizes, prefix
+  matching, unknown-rule fallback.
+- `services/worker/tests/test_llm_pipeline.py` — new test asserting the SQLi
+  payload list actually appears in the outbound HTTP request sent to LLM A
+  for a SQLi finding.
+
+### Acceptance (raw output)
+
+```
+$ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /srv \
+    -e PYTHONPATH=/srv:/srv/api --entrypoint python migrate -m pytest -q worker/tests
+..........................                                               [100%]
+26 passed, 1 warning in 1.19s
+```
+26 = 22 from S6 + 3 new payload tests + 1 new pipeline test.
+
+### Not working / stubbed / assumed
+
+- There is still **no enforcement** that LLM A actually included the fixed
+  payloads in its testbench, or that it didn't invent weaker ones alongside
+  them — by the user's explicit instruction, this step is prompt-only. If
+  that turns out to matter, it would need checking in S7's gate.
+- `exploit_assertions`/`benign_assertions` (the VulnClass interface methods
+  from S3) are untouched and still raise `NotImplementedError` — this fix
+  bypassed them entirely in favor of a simpler standalone module, since the
+  user's instruction was explicit ("no assembly code in build_testbench").
+  Worth revisiting whether those two interface methods still have a purpose
+  or should be removed.
+
 ## S1 — migration 0004, LLM A/B config, remove Ollama
 
 **Branch:** `feat/remediation-s1-config` (off `feat/remediation-loop`)

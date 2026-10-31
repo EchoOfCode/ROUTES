@@ -13,6 +13,7 @@ from routes_shared.remediation import FixConstraints, Snapshot
 from worker.llm.client import LLMClient
 from worker.llm.llm_a import call_llm_a
 from worker.llm.llm_b import call_llm_b
+from worker.llm.payloads import KNOWN_EXPLOIT_PAYLOADS
 
 REAL_SECRET = "abcd1234efgh5678ijkl"
 
@@ -66,6 +67,15 @@ def test_llm_a_never_sends_the_real_secret():
     assert REAL_SECRET not in result.prompt_for_fix
     assert REAL_SECRET not in result.testbench
     assert REAL_SECRET in result.placeholder_map.values()
+
+
+def test_llm_a_prompt_includes_the_fixed_payload_list_for_the_finding_rule():
+    requests: list = []
+    call_llm_a(_llm_a_client(requests), FINDING, SNAPSHOT)
+
+    sent_text = requests[0].content.decode()
+    for payload in KNOWN_EXPLOIT_PAYLOADS["routes.sqli"]:
+        assert payload in sent_text
 
 
 def test_llm_b_accepts_a_good_fix_and_restores_the_real_secret():
