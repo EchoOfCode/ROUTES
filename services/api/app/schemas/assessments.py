@@ -121,6 +121,15 @@ class SourceResultOut(BaseModel):
     warnings: list
 
 
+class SnapshotOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    file: str
+    start_line: int
+    end_line: int
+    code: str
+
+
 class FindingOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -133,6 +142,7 @@ class FindingOut(BaseModel):
     title: str
     file: str | None
     line: int | None
+    end_line: int | None
     endpoint: str | None
     method: str | None
     rule_id: str
@@ -140,6 +150,8 @@ class FindingOut(BaseModel):
     evidence_summary: str
     technical_details: dict
     recommendation: str
+    fingerprint: str
+    snapshot: SnapshotOut | None
     created_at: datetime
 
 

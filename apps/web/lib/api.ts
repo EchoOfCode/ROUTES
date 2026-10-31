@@ -191,12 +191,32 @@ export type SourceResult = {
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
 
+export type Snapshot = { file: string; start_line: number; end_line: number; code: string };
+
 export type Finding = {
   id: string; assessment_id: string; type: string; status: "potential" | "confirmed" | "inconclusive";
   severity: Severity; confidence: "high" | "medium" | "low"; title: string; file: string | null; line: number | null;
-  endpoint: string | null; method: string | null; rule_id: string; plain_description: string;
-  evidence_summary: string; technical_details: Record<string, unknown>; recommendation: string; created_at: string;
+  end_line: number | null; endpoint: string | null; method: string | null; rule_id: string; plain_description: string;
+  evidence_summary: string; technical_details: Record<string, unknown>; recommendation: string;
+  fingerprint: string; snapshot: Snapshot | null; created_at: string;
   project_id?: string; project_name?: string;
+};
+
+export type RemediationStatus = "pending" | "running" | "succeeded" | "needs_human_review" | "failed" | "cancelled";
+
+export const ACTIVE_REMEDIATION_STATUSES: RemediationStatus[] = ["pending", "running"];
+
+export type RemediationIteration = {
+  id: string; round_no: number | null; candidate_hash: string | null; candidate_code: string | null;
+  test_results: { status?: string; tests?: { name: string; category: "exploit" | "benign"; passed: boolean; message: string }[] };
+  rescan_diff: { fingerprint_gone?: boolean; new_fingerprints?: string[] };
+  failure_output: string | null; created_at: string;
+};
+
+export type Remediation = {
+  id: string; finding_id: string; status: RemediationStatus; finding_status: string; cancel_requested: boolean;
+  error: string | null; started_at: string | null; finished_at: string | null; created_at: string;
+  iterations: RemediationIteration[];
 };
 
 export type Overview = {

@@ -3,6 +3,7 @@
 import json
 import zipfile
 from pathlib import Path
+from shutil import copytree
 
 import pytest
 
@@ -14,13 +15,17 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def zip_fixture(name: str, tmp_path: Path, extra: dict[str, str] | None = None) -> Path:
+    """Zip a fixture repo. An `extra` entry replaces a fixture file of the same
+    name rather than being added alongside it (extract_zip rejects duplicates)."""
     root = FIXTURES / name
     path = tmp_path / f"{name}.zip"
+    extra = extra or {}
     with zipfile.ZipFile(path, "w") as zf:
         for f in root.rglob("*"):
-            if f.is_file():
-                zf.write(f, f"{name}-main/{f.relative_to(root).as_posix()}")
-        for rel, content in (extra or {}).items():
+            rel = f.relative_to(root).as_posix() if f.is_file() else None
+            if rel and rel not in extra:
+                zf.write(f, f"{name}-main/{rel}")
+        for rel, content in extra.items():
             zf.writestr(f"{name}-main/{rel}", content)
     return path
 
@@ -42,6 +47,10 @@ def nextjs(tmp_path_factory):
 
 def sqli(result):
     return [f for f in result["findings"] if f["type"] == "SQL Injection"]
+
+
+def xss(result):
+    return [f for f in result["findings"] if f["type"] == "Cross-Site Scripting"]
 
 
 def by_file(findings):
@@ -124,6 +133,48 @@ def test_no_confirmed_findings_in_phase_1(nextjs):
     assert all(f["status"] in ("potential", "inconclusive") for f in nextjs["findings"])
 
 
+def test_xss_dom_sink(nextjs):
+    found = [f for f in xss(nextjs) if f["rule_id"] == "routes.xss.dom-sink-tainted"]
+    assert len(found) == 1
+    f = found[0]
+    assert f["file"] == "components/Preview.tsx"
+    assert f["end_line"] >= f["line"]
+    assert f["technical_details"]["source"]["kind"] == "URL/browser state"
+    assert "innerHTML" in f["evidence_summary"]
+
+
+def test_xss_reflected_response(nextjs):
+    found = [f for f in xss(nextjs) if f["rule_id"] == "routes.xss.reflected-response"]
+    assert len(found) == 1
+    f = found[0]
+    assert f["file"] == "app/api/echo/route.ts"
+    assert f["endpoint"] == "/api/echo" and f["method"] == "GET"
+    assert f["confidence"] == "high" and f["severity"] == "high"
+    assert f["technical_details"]["source"]["kind"] == "URL query parameter"
+    assert f["technical_details"]["source"]["name"] == "name"
+
+
+def test_findings_carry_a_snapshot_of_their_enclosing_function(nextjs):
+    """S8a: the snapshot (rather than just file/line) is persisted at scan
+    time, since the worker has no way to rebuild it later."""
+    search = next(f for f in sqli(nextjs) if f["file"] == "app/api/search/route.ts")
+    snapshot = search["snapshot"]
+    assert snapshot is not None
+    assert snapshot["file"] == "app/api/search/route.ts"
+    assert snapshot["start_line"] < search["line"] < snapshot["end_line"]
+    assert "export async function GET" in snapshot["code"]
+    assert "pool.query" in snapshot["code"]
+
+    dom_sink = next(f for f in xss(nextjs) if f["rule_id"] == "routes.xss.dom-sink-tainted")
+    assert dom_sink["snapshot"] is not None
+    assert dom_sink["snapshot"]["code"].strip().startswith("export function Preview")
+
+    # Semgrep-sourced findings aren't behind a VulnClass plugin yet, so they
+    # have no snapshot - confirmed absent rather than silently fabricated.
+    secret_finding = next(f for f in nextjs["findings"] if f["rule_id"] == "routes.secrets.aws-access-key")
+    assert secret_finding.get("snapshot") is None
+
+
 def test_semgrep_rules(nextjs):
     rules = {(f["rule_id"], f["file"], f["line"]) for f in nextjs["findings"]}
     assert ("routes.exec.child-process-dynamic", "app/api/exec/route.ts", 5) in rules
@@ -170,6 +221,32 @@ def test_partial_support_without_pg(tmp_path):
     assert result["support_status"] == "partial"
     assert "Prisma ORM" in result["support_reason"]
     assert [r["path"] for r in result["routes"]] == ["/api/items"]
+
+
+def test_fingerprint_survives_reformatting(tmp_path_factory):
+    """M1 acceptance test: reformatting a vulnerable file (reindenting, adding
+    blank lines, shifting its line numbers) must not change its fingerprint."""
+    base = run_fixture("nextjs-pg", tmp_path_factory.mktemp("fp_base"), "shop.acme-demo.com")
+
+    moved_root = tmp_path_factory.mktemp("fp_moved_src")
+    copytree(FIXTURES / "nextjs-pg", moved_root, dirs_exist_ok=True)
+    target = moved_root / "app" / "api" / "search" / "route.ts"
+    reformatted = "\n\n\n" + target.read_text().replace("const q = ", "const   q    =   ")
+    target.write_text(reformatted)
+
+    zip_path = tmp_path_factory.mktemp("fp_moved_zip") / "nextjs-pg.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        for f in moved_root.rglob("*"):
+            if f.is_file():
+                zf.write(f, f"nextjs-pg-main/{f.relative_to(moved_root).as_posix()}")
+    src_dir = tmp_path_factory.mktemp("fp_moved_extract")
+    extract_zip(zip_path, src_dir)
+    moved = analyse(src_dir, "zip", "shop.acme-demo.com")
+
+    before = next(f for f in sqli(base) if f["file"] == "app/api/search/route.ts")
+    after = next(f for f in sqli(moved) if f["file"] == "app/api/search/route.ts")
+    assert before["line"] != after["line"]
+    assert before["fingerprint"] == after["fingerprint"]
 
 
 def test_main_reports_fatal_for_bad_archive(tmp_path, monkeypatch, capsys):

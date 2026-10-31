@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, FastAPI
 from sqlalchemy import text
 
-from app.api import assessments, auth, overview, projects
+from app.api import assessments, auth, overview, projects, remediations
 from app.core.config import get_settings
 from app.core.csrf import CsrfMiddleware
 from app.core.db import get_engine
@@ -29,6 +29,7 @@ def create_app() -> FastAPI:
     v1.include_router(auth.router)
     v1.include_router(projects.router)
     v1.include_router(assessments.router)
+    v1.include_router(remediations.router)
     v1.include_router(overview.router)
     app.include_router(v1)
 

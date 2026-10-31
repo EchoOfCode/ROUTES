@@ -17,12 +17,13 @@ from routes_shared.redaction import redact_structure
 
 from source_analyzer.acquisition.archive import ArchiveError, extract_tar_gz, extract_zip
 from source_analyzer.acquisition.github import ImportFailed, download
-from source_analyzer.data_flow.sqli import SqliAnalyzer
 from source_analyzer.events import emit, emit_result
 from source_analyzer.profiling.matching import collect as collect_matching
 from source_analyzer.profiling.profile import build_profile
-from source_analyzer.static_analysis.findings import sqli_finding, sqli_inconclusive
+from source_analyzer.static_analysis.headers import check_security_headers
 from source_analyzer.static_analysis.semgrep_runner import SemgrepFailed, run_semgrep
+from source_analyzer.vuln_classes import VULN_CLASSES, AnalysisContext
+from source_analyzer.vuln_classes.base import snapshot_for
 
 WORK = Path(os.environ.get("ROUTES_WORK_DIR", "/work"))
 
@@ -90,15 +91,51 @@ def analyse(root: Path, kind: str, target_host: str) -> dict:
         emit("running_static_rules", f"Static rules reported {len(semgrep_findings)} potential issue(s)",
              static_matches=len(semgrep_findings))
 
+    try:
+        findings.extend(check_security_headers(profile))
+    except Exception:  # noqa: BLE001
+        warnings.append("The security-header check on next.config could not be completed.")
+
     js_files = profile.js_files()
     if profile.framework == "Next.js" and js_files:
         emit("analysing_structure", f"Parsing {len(js_files)} JavaScript/TypeScript files")
         sources = {f.rel: f.path.read_bytes() for f in js_files[:5000]}
-        analyzer = SqliAnalyzer(sources, tsconfig_paths=profile.tsconfig_paths, tsconfig_base=profile.tsconfig_base)
         emit("tracing_data_flow", "Tracing user input to database queries")
-        analyzer.run()
-        if analyzer.parse_errors:
-            warnings.append(f"{len(analyzer.parse_errors)} file(s) could not be parsed completely.")
+        ctx = AnalysisContext(files=sources, tsconfig_paths=profile.tsconfig_paths,
+                              tsconfig_base=profile.tsconfig_base, pg_declared="pg" in profile.dep_names())
+        snapshot_failures = 0
+        for vuln_class in VULN_CLASSES:
+            plugin_findings = vuln_class.detect(ctx)
+            for f in plugin_findings:
+                try:
+                    snapshot = vuln_class.build_snapshot(f, ctx)
+                    f["snapshot"] = {"file": snapshot.file, "start_line": snapshot.start_line,
+                                     "end_line": snapshot.end_line, "code": snapshot.code}
+                except Exception:  # noqa: BLE001
+                    # The finding itself is still valid and reported; only
+                    # the remediation-loop snapshot is unavailable for it.
+                    f["snapshot"] = None
+                    snapshot_failures += 1
+            findings.extend(plugin_findings)
+        # Semgrep-sourced findings have no plugin behind them, but a snapshot
+        # is what makes a finding remediable at all (worker.fix_table has
+        # deterministic fixes for several of these rules), so build one for
+        # any that landed in a file this run already parsed.
+        for f in findings:
+            if "snapshot" in f or not f.get("file") or not f.get("line"):
+                continue
+            try:
+                snapshot = snapshot_for(f, ctx)
+                f["snapshot"] = {"file": snapshot.file, "start_line": snapshot.start_line,
+                                 "end_line": snapshot.end_line, "code": snapshot.code}
+            except Exception:  # noqa: BLE001
+                f["snapshot"] = None
+
+        if snapshot_failures:
+            warnings.append(f"{snapshot_failures} finding(s) could not have a code snapshot built for them.")
+        warnings.extend(ctx.warnings)
+
+        analyzer = ctx.sqli_analyzer
         result["routes"] = [
             {"path": r.endpoint, "methods": sorted({h.method for h in r.handlers}), "file": r.rel,
              "line": r.handlers[0].line if r.handlers else None, "router": r.router,
@@ -112,12 +149,6 @@ def analyse(root: Path, kind: str, target_host: str) -> dict:
             for i in analyzer.interactions
         ]
         result["input_sources"] = analyzer.input_sources[:2000]
-        if "pg" in profile.dep_names() or any(m.imports_pg for m in analyzer.modules.values()):
-            for i in analyzer.interactions:
-                if i.uses_user_input and i.construction in ("interpolated", "concatenated", "direct"):
-                    findings.append(sqli_finding(i))
-            for exp in analyzer.helper_sinks_without_tainted_callers():
-                findings.append(sqli_inconclusive(exp))
         flows = sum(1 for f in findings if f.get("type") == "SQL Injection" and f.get("status") == "potential")
         emit("tracing_data_flow", f"{len(result['routes'])} route(s) traced, {flows} SQL injection flow(s) found",
              routes=len(result["routes"]), sqli_flows=flows)

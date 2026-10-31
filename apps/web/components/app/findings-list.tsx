@@ -4,6 +4,7 @@ import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 import * as React from "react";
 
+import { RemediationPanel } from "@/components/app/remediation-panel";
 import { FindingStatusTag, MethodTag, SeverityTag } from "@/components/app/status";
 import type { Finding } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -116,6 +117,7 @@ function FindingDetail({ finding: f, showProject }: { finding: Finding; showProj
           )}
         </div>
       </div>
+      <RemediationPanel assessmentId={f.assessment_id} finding={f} />
     </div>
   );
 }

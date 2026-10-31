@@ -6,9 +6,8 @@ import json
 import subprocess
 from pathlib import Path
 
-from routes_shared.redaction import mask_value, redact_text
-
-from source_analyzer.data_flow.sqli import fingerprint
+from routes_shared.fingerprint import fingerprint
+from routes_shared.redaction import mask_string_literals, mask_value, redact_text
 
 RULES = Path(__file__).parent / "rules"
 TIMEOUT = 300
@@ -53,6 +52,23 @@ SECRET_DEFAULTS = {
 }
 
 
+def matched_lines(root: Path, rel: str, start: dict, end: dict) -> str:
+    """Read the matched source span from disk.
+
+    Semgrep >= 1.18 returns the literal string "requires login" in
+    extra.lines, which would otherwise become every finding's snippet and
+    collapse distinct findings of one rule in one file onto one fingerprint.
+    """
+    first = start.get("line")
+    if not first:
+        return ""
+    try:
+        lines = (root / rel).read_text("utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    return "\n".join(lines[first - 1:max(end.get("line") or first, first)])
+
+
 def normalise(result: dict, root: Path) -> dict:
     meta = dict((result.get("extra") or {}).get("metadata") or {})
     if ".secrets." in result.get("check_id", ""):
@@ -64,7 +80,9 @@ def normalise(result: dict, root: Path) -> dict:
         rel = path.as_posix()
     start = result.get("start") or {}
     end = result.get("end") or {}
-    snippet = redact_text((result.get("extra") or {}).get("lines", ""), max_length=200)
+    # The snippet is real source now, so a hardcoded credential on the matched
+    # line would otherwise leave the sandbox inside it.
+    snippet = redact_text(mask_string_literals(matched_lines(root, rel, start, end)), max_length=200)
     evidence_value = ""
     if meta.get("secret"):
         # Never keep the secret itself: show at most its first four characters.
@@ -73,7 +91,6 @@ def normalise(result: dict, root: Path) -> dict:
         except OSError:
             raw = ""
         evidence_value = mask_value(raw.strip().strip("'\"")) if raw else "[redacted]"
-        snippet = redact_text(snippet.replace(raw, evidence_value) if raw else snippet, max_length=200)
     rule_id = result.get("check_id", "routes.unknown").split(".routes.", 1)[-1]
     if not rule_id.startswith("routes."):
         rule_id = "routes." + rule_id.split("routes.", 1)[-1]
@@ -88,13 +105,13 @@ def normalise(result: dict, root: Path) -> dict:
         "title": meta.get("routes_title", "Security pattern detected"),
         "file": rel,
         "line": start.get("line"),
+        "end_line": end.get("line"),
         "endpoint": None,
         "method": None,
         "rule_id": rule_id[:200],
         "plain_description": " ".join(str(meta.get("routes_plain", result.get("extra", {}).get("message", ""))).split()),
         "evidence_summary": evidence,
         "recommendation": " ".join(str(meta.get("routes_recommendation", "")).split()),
-        "technical_details": {"engine": "semgrep", "rule": rule_id, "cwe": meta.get("cwe"),
-                              "snippet": snippet, "end_line": end.get("line")},
-        "_fingerprint": fingerprint(rule_id, rel, start.get("line"), start.get("col")),
+        "technical_details": {"engine": "semgrep", "rule": rule_id, "cwe": meta.get("cwe"), "snippet": snippet},
+        "_fingerprint": fingerprint(rule_id, rel, snippet),
     }

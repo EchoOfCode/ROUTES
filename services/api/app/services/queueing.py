@@ -13,9 +13,10 @@ JOB_FUNCS = {
     "discovery": "worker.jobs.discovery.run_discovery_job",
     "source": "worker.jobs.source.run_source_job",
     "results": "worker.jobs.results.run_results_job",
+    "remediate": "worker.jobs.remediate.run_remediate_job",
 }
 
-JOB_TIMEOUTS = {"discovery": 900, "source": 1200, "results": 300}
+JOB_TIMEOUTS = {"discovery": 900, "source": 1200, "results": 300, "remediate": 1800}
 
 
 def enqueue_job(kind: str, job_id: uuid.UUID, **kwargs) -> None:

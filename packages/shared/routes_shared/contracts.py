@@ -195,6 +195,16 @@ class MatchEvidence(_Model):
     matches_target: bool = False
 
 
+class SnapshotOut(_Model):
+    """The data-flow slice for this finding - plain code, no LLM involved
+    in producing it (built at scan time, VulnClass.build_snapshot)."""
+
+    file: Url
+    start_line: int
+    end_line: int
+    code: Annotated[str, Field(max_length=2000)]
+
+
 class Finding(_Model):
     type: Str200
     status: Literal["potential", "confirmed", "inconclusive"] = "potential"
@@ -203,6 +213,7 @@ class Finding(_Model):
     title: Str500
     file: Url | None = None
     line: int | None = None
+    end_line: int | None = None
     endpoint: Url | None = None
     method: Str200 | None = None
     rule_id: Str200
@@ -211,6 +222,7 @@ class Finding(_Model):
     technical_details: dict[str, Any] = Field(default_factory=dict)
     recommendation: Annotated[str, Field(max_length=2000)]
     fingerprint: Annotated[str, Field(max_length=64)] | None = None
+    snapshot: SnapshotOut | None = None
 
 
 class SourceResult(_Model):

@@ -28,6 +28,34 @@ class Settings(BaseSettings):
     assessment_history_limit: int = Field(default=5, alias="ASSESSMENT_HISTORY_LIMIT")
     login_rate_limit: int = Field(default=10, alias="LOGIN_RATE_LIMIT_PER_15MIN")
 
+    # LLM A: reads the redacted report+snapshot, writes LLM B's prompt and the
+    # testbench. Default: Groq's free tier (OpenAI-compatible).
+    llm_a_endpoint: str = Field(default="https://api.groq.com/openai/v1/chat/completions", alias="LLM_A_ENDPOINT")
+    llm_a_api_key: str = Field(default="", alias="LLM_A_API_KEY")
+    llm_a_model: str = Field(default="llama-3.3-70b-versatile", alias="LLM_A_MODEL")
+    # LLM B: a different model from A, writes the fixed code. Default:
+    # OpenRouter's free tier, a coder-tuned model (OpenAI-compatible).
+    llm_b_endpoint: str = Field(default="https://openrouter.ai/api/v1/chat/completions", alias="LLM_B_ENDPOINT")
+    llm_b_api_key: str = Field(default="", alias="LLM_B_API_KEY")
+    llm_b_model: str = Field(default="qwen/qwen-2.5-coder-32b-instruct:free", alias="LLM_B_MODEL")
+
+    # "live": always call out. "record": call out and save the response.
+    # "replay": never call out, read from the cache, error clearly on a miss.
+    llm_cache_mode: str = Field(default="live", alias="LLM_CACHE_MODE")
+    llm_cache_dir: str = Field(default="/tmp/llm_cache", alias="LLM_CACHE_DIR")
+
+    # "fake": FakeSandboxRunner (canned results, no real execution). "real":
+    # RealSandboxRunner (HTTP to sandbox_manager) - not yet functional until
+    # sandbox_manager's owner adds a matching run kind. Switching is this one
+    # flag, never a code change.
+    sandbox_runner_kind: str = Field(default="fake", alias="SANDBOX_RUNNER_KIND")
+
+    batch_size: int = Field(default=8, alias="BATCH_SIZE")
+    llm_concurrency: int = Field(default=4, alias="LLM_CONCURRENCY")
+    max_rounds: int = Field(default=5, alias="MAX_ROUNDS")
+    stagnation_rounds: int = Field(default=2, alias="STAGNATION_ROUNDS")
+    remediation_token_budget: int = Field(default=8000, alias="REMEDIATION_TOKEN_BUDGET")
+
     @property
     def origins(self) -> list[str]:
         return [o.strip().rstrip("/") for o in self.allowed_origins.split(",") if o.strip()]

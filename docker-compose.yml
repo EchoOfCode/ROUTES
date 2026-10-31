@@ -132,6 +132,36 @@ services:
       worker-discovery: { condition: service_started }
     restart: unless-stopped
 
+  # Remediation is the only worker with internet access: it calls external
+  # LLM APIs directly (never from a sandbox). discovery/source stay fully
+  # internal, as before.
+  worker-remediate:
+    image: routes/worker:local
+    <<: *hardening
+    tmpfs: ["/tmp:size=64m"]
+    command: ["python", "-m", "worker.queues.run_worker", "remediate"]
+    environment:
+      <<: *api-env
+      LLM_A_ENDPOINT: ${LLM_A_ENDPOINT:-https://api.groq.com/openai/v1/chat/completions}
+      LLM_A_API_KEY: ${LLM_A_API_KEY:-}
+      LLM_A_MODEL: ${LLM_A_MODEL:-llama-3.3-70b-versatile}
+      LLM_B_ENDPOINT: ${LLM_B_ENDPOINT:-https://openrouter.ai/api/v1/chat/completions}
+      LLM_B_API_KEY: ${LLM_B_API_KEY:-}
+      LLM_B_MODEL: ${LLM_B_MODEL:-qwen/qwen-2.5-coder-32b-instruct:free}
+      LLM_CACHE_MODE: ${LLM_CACHE_MODE:-live}
+      LLM_CACHE_DIR: ${LLM_CACHE_DIR:-/tmp/llm_cache}
+      SANDBOX_RUNNER_KIND: ${SANDBOX_RUNNER_KIND:-fake}
+      BATCH_SIZE: ${BATCH_SIZE:-8}
+      LLM_CONCURRENCY: ${LLM_CONCURRENCY:-4}
+      MAX_ROUNDS: ${MAX_ROUNDS:-5}
+      STAGNATION_ROUNDS: ${STAGNATION_ROUNDS:-2}
+      REMEDIATION_TOKEN_BUDGET: ${REMEDIATION_TOKEN_BUDGET:-8000}
+    networks: [backend, egress]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
   web:
     profiles: ["web"]
     build:

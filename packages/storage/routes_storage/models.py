@@ -187,6 +187,7 @@ class Finding(Base):
     title: Mapped[str] = mapped_column(String(500))
     file: Mapped[str | None] = mapped_column(String(2048))
     line: Mapped[int | None] = mapped_column(Integer)
+    end_line: Mapped[int | None] = mapped_column(Integer, nullable=True)
     endpoint: Mapped[str | None] = mapped_column(String(2048))
     method: Mapped[str | None] = mapped_column(String(16))
     rule_id: Mapped[str] = mapped_column(String(200))
@@ -195,5 +196,6 @@ class Finding(Base):
     technical_details: Mapped[dict] = mapped_column(JSON, default=dict)
     recommendation: Mapped[str] = mapped_column(Text)
     fingerprint: Mapped[str] = mapped_column(String(64))
+    snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     __table_args__ = (UniqueConstraint("assessment_id", "fingerprint"), UniqueConstraint("assessment_id", "seq"),
                       Index("ix_findings_assessment_severity", "assessment_id", "severity"))

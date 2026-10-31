@@ -1,6 +1,6 @@
 import { Loader2 } from "lucide-react";
 
-import type { AssessmentStatus, Finding, Severity } from "@/lib/api";
+import type { AssessmentStatus, Finding, RemediationStatus, Severity } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const STATUS: Record<AssessmentStatus, { label: string; dot: string; text: string; spin?: boolean }> = {
@@ -68,6 +68,25 @@ export function SeverityBreakdown({ counts }: { counts: Record<string, number> }
           <span className="text-muted">{SEVERITY[s].label.toLowerCase()}</span>
         </span>
       ))}
+    </span>
+  );
+}
+
+const REMEDIATION_STATUS: Record<RemediationStatus, { label: string; dot: string; text: string; spin?: boolean }> = {
+  pending: { label: "Queued", dot: "bg-faint", text: "text-muted" },
+  running: { label: "Fixing…", dot: "bg-accent", text: "text-accent", spin: true },
+  succeeded: { label: "Fixed", dot: "bg-ok", text: "text-ok" },
+  needs_human_review: { label: "Needs human review", dot: "bg-warn", text: "text-warn" },
+  failed: { label: "Failed", dot: "bg-bad", text: "text-bad" },
+  cancelled: { label: "Cancelled", dot: "bg-faint", text: "text-muted" },
+};
+
+export function RemediationStatusTag({ status }: { status: RemediationStatus }) {
+  const s = REMEDIATION_STATUS[status] ?? REMEDIATION_STATUS.pending;
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 text-[12.5px] font-medium", s.text)}>
+      {s.spin ? <Loader2 className="size-3.5 animate-spin" /> : <span className={cn("size-1.5 rounded-full", s.dot)} />}
+      {s.label}
     </span>
   );
 }
