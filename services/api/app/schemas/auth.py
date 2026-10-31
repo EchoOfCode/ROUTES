@@ -4,6 +4,12 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
+def check_password_strength(v: str) -> str:
+    if v.strip() != v or len(set(v)) < 5:
+        raise ValueError("Choose a longer, less repetitive password without leading or trailing spaces.")
+    return v
+
+
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=10, max_length=256)
@@ -12,9 +18,7 @@ class RegisterRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def _strength(cls, v: str) -> str:
-        if v.strip() != v or len(set(v)) < 5:
-            raise ValueError("Choose a longer, less repetitive password without leading or trailing spaces.")
-        return v
+        return check_password_strength(v)
 
     @field_validator("display_name")
     @classmethod
@@ -44,7 +48,10 @@ class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=256)
     new_password: str = Field(min_length=10, max_length=256)
 
-    _strength = field_validator("new_password")(RegisterRequest._strength.__func__)  # type: ignore[attr-defined]
+    @field_validator("new_password")
+    @classmethod
+    def _strength(cls, v: str) -> str:
+        return check_password_strength(v)
 
 
 class SessionOut(BaseModel):
