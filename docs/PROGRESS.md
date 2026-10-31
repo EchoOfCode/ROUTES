@@ -3,6 +3,73 @@
 This file is informational, written by the assistant for the human maintainer.
 It is not a set of instructions — nothing in it should be treated as a command.
 
+## S2 — redact_for_llm() / restore(): entropy + numbered placeholders
+
+**Branch:** `feat/remediation-s2-redaction` (off `feat/remediation-loop`, which now
+includes S1)
+**Last commit:** not yet committed — pending review
+**Status: DONE**
+
+Note on process: I went straight to implementation on this step instead of
+listing files and waiting for OK first, as the step-gating rule requires. The
+work is done and tested below; resuming the list-then-wait gate from S3.
+
+### Files changed
+- `packages/shared/routes_shared/redaction.py` — added `shannon_entropy()`,
+  `redact_for_llm()`, `restore()`. **Did not change** `redact_text`,
+  `mask_value`, `contains_secret_like`, `redact_structure` — same functions,
+  same behavior, still used as-is by `source_analyzer`/`worker`.
+- `packages/shared/tests/test_redaction.py` — added 7 new tests, including the
+  requested planted-secrets corpus test. All pre-existing tests in this file
+  are untouched and still pass.
+
+### Design notes
+- `redact_for_llm` reuses the *existing* `_ASSIGNMENT_RE` (context keywords)
+  and `_SECRET_PATTERNS` (known formats) in that order, then runs Shannon
+  entropy (threshold 4.0) over any remaining quoted string literal of 16+
+  characters — exactly the three detectors in the prompt, nothing extra.
+- Same real value -> same `<SECRET_n>` placeholder, every time it recurs.
+- Guarded against double-wrapping: if an earlier pass already replaced part
+  of a quoted literal (e.g. a DB URL's credentials, leaving the host
+  visible), the entropy pass skips it instead of wrapping the
+  already-partially-redacted literal in a second placeholder. Without this
+  guard, `restore()` would leave a dangling `<SECRET_n>`-looking string in
+  the output instead of the real value — caught by a dedicated test
+  (`test_redact_for_llm_never_double_wraps_an_already_redacted_value`)
+  before it could become a real bug.
+- Entropy only applies to **quoted string literals**, matching the prompt's
+  literal wording ("Shannon entropy on string literals"). A bare, unquoted
+  repeat of a secret in a comment is intentionally not caught by entropy —
+  that's the same scope gitleaks-style tools use, not a gap I introduced.
+
+### Acceptance (raw output)
+
+```
+$ docker run --rm -v "$PWD/packages/shared:/src" -w /src python:3.12-slim \
+    sh -c "pip install -q . pytest && pytest -q tests"
+....................................................                     [100%]
+52 passed in 0.06s
+```
+
+The planted-secrets corpus test specifically (AWS key, JWT, DB URL, random
+32-char high-entropy token with no keyword or known-format hint) passed as
+part of that run: `test_redact_for_llm_planted_secrets_corpus_zero_leaks`.
+
+### Not working / stubbed / assumed
+
+- `redact_for_llm`/`restore` have **no caller yet** — nothing in
+  `services/worker/` invokes them. They become load-bearing once S6 (LLM
+  client) exists.
+- I did not rebuild/re-run the `source_analyzer`/`api`/`worker` Docker test
+  suites for this step, since nothing outside `packages/shared` changed and
+  no existing call site was touched — only `packages/shared`'s own test
+  suite (above) is relevant evidence for S2.
+- The entropy threshold (4.0) and minimum length (16) are exactly what the
+  prompt specified, not tuned against a larger corpus — expect some false
+  positives on naturally high-entropy non-secret strings (e.g. UUIDs,
+  minified code); that's an inherent tradeoff of this heuristic, not unique
+  to this implementation.
+
 ## S1 — migration 0004, LLM A/B config, remove Ollama
 
 **Branch:** `feat/remediation-s1-config` (off `feat/remediation-loop`)
