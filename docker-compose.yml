@@ -136,6 +136,7 @@ services:
   # LLM APIs directly (never from a sandbox). discovery/source stay fully
   # internal, as before.
   worker-remediate:
+    profiles: ["web"]
     image: routes/worker:local
     <<: *hardening
     tmpfs: ["/tmp:size=64m"]
