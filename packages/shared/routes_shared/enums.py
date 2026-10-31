@@ -99,6 +99,16 @@ class RemediationStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class FindingRemediationStatus(StrEnum):
+    """Per-finding status within a remediation loop run (distinct from
+    Remediation.status, which is the run's own lifecycle state)."""
+
+    OPEN = "open"
+    FIXED = "fixed"
+    RETRYING = "retrying"
+    NEEDS_HUMAN_REVIEW = "needs_human_review"
+
+
 class EndpointOrigin(StrEnum):
     FORM = "form"
     LINK_QUERY = "link_query"

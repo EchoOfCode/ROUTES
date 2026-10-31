@@ -28,12 +28,19 @@ class Settings(BaseSettings):
     assessment_history_limit: int = Field(default=5, alias="ASSESSMENT_HISTORY_LIMIT")
     login_rate_limit: int = Field(default=10, alias="LOGIN_RATE_LIMIT_PER_15MIN")
 
-    local_llm_endpoint: str = Field(default="http://ollama:11434", alias="LOCAL_LLM_ENDPOINT")
-    local_llm_model: str = Field(default="mistral-nemo", alias="LOCAL_LLM_MODEL")
-    big_llm_endpoint: str = Field(default="", alias="BIG_LLM_ENDPOINT")
-    big_llm_api_key: str = Field(default="", alias="BIG_LLM_API_KEY")
-    big_llm_model: str = Field(default="", alias="BIG_LLM_MODEL")
-    max_remediation_iters: int = Field(default=3, alias="MAX_ITERS")
+    # LLM A: reads the redacted report+snapshot, writes LLM B's prompt and the testbench.
+    llm_a_endpoint: str = Field(default="", alias="LLM_A_ENDPOINT")
+    llm_a_api_key: str = Field(default="", alias="LLM_A_API_KEY")
+    llm_a_model: str = Field(default="", alias="LLM_A_MODEL")
+    # LLM B: a different model from A, writes the fixed code.
+    llm_b_endpoint: str = Field(default="", alias="LLM_B_ENDPOINT")
+    llm_b_api_key: str = Field(default="", alias="LLM_B_API_KEY")
+    llm_b_model: str = Field(default="", alias="LLM_B_MODEL")
+
+    batch_size: int = Field(default=8, alias="BATCH_SIZE")
+    llm_concurrency: int = Field(default=4, alias="LLM_CONCURRENCY")
+    max_rounds: int = Field(default=5, alias="MAX_ROUNDS")
+    stagnation_rounds: int = Field(default=2, alias="STAGNATION_ROUNDS")
     remediation_token_budget: int = Field(default=8000, alias="REMEDIATION_TOKEN_BUDGET")
 
     @property

@@ -15,6 +15,7 @@ class Remediation(IdMixin, TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("security_findings.id", ondelete="CASCADE"), nullable=False, index=True
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    finding_status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
     error: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -32,6 +33,8 @@ class RemediationIteration(IdMixin, TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("remediations.id", ondelete="CASCADE"), nullable=False, index=True
     )
     iteration_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    round_no: Mapped[int | None] = mapped_column(Integer)
+    batch_id: Mapped[str | None] = mapped_column(String(64))
     candidate_hash: Mapped[str | None] = mapped_column(String(64))
     test_results: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     rescan_diff: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
