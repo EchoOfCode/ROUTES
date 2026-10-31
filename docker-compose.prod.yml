@@ -1,0 +1,246 @@
+name: routes-prod
+
+# -----------------------------------------------------------------------------
+# ROUTES Production Docker Compose Stack
+# Uses pre-built images from GitHub Container Registry (GHCR).
+# Controlled by CI/CD via scripts/healthcheck.sh and scripts/rollback.sh.
+# -----------------------------------------------------------------------------
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+x-api-env: &api-env
+  ROUTES_ENV: production
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:-routes}
+  REDIS_URL: redis://redis:6379/0
+  SANDBOX_MANAGER_URL: http://sandbox-manager:8100
+  SANDBOX_MANAGER_TOKEN: ${SANDBOX_MANAGER_TOKEN:?SANDBOX_MANAGER_TOKEN must be set}
+  ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+  COOKIE_SECURE: ${COOKIE_SECURE:-true}
+  SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-72}
+  ASSESSMENT_HISTORY_LIMIT: ${ASSESSMENT_HISTORY_LIMIT:-10}
+  GATEWAY_DEV_ALLOW_HOSTS: ${GATEWAY_DEV_ALLOW_HOSTS:-}
+  UPLOADS_DIR: /data/uploads
+
+services:
+  # ------------------------------------------------------------- Data Stores
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-routes}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # ------------------------------------------------------------- Application Services
+  migrate:
+    image: ${IMAGE_PREFIX:-ghcr.io/echoofcode/routes}/routes-api:${IMAGE_TAG:-latest}
+    command: ["python", "-m", "app.cli"]
+    environment: *api-env
+    volumes:
+      - uploads:/data/uploads
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: ${IMAGE_PREFIX:-ghcr.io/echoofcode/routes}/routes-api:${IMAGE_TAG:-latest}
+    <<: *hardening
+    tmpfs:
+      - /tmp:size=128m
+    environment: *api-env
+    volumes:
+      - uploads:/data/uploads
+    networks:
+      - backend
+      - frontend
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      sandbox-manager:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  worker-discovery:
+    image: ${IMAGE_PREFIX:-ghcr.io/echoofcode/routes}/routes-worker:${IMAGE_TAG:-latest}
+    <<: *hardening
+    tmpfs:
+      - /tmp:size=64m
+    command: ["python", "-m", "worker.queues.run_worker", "discovery", "results"]
+    environment: *api-env
+    networks:
+      - backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker-source:
+    image: ${IMAGE_PREFIX:-ghcr.io/echoofcode/routes}/routes-worker:${IMAGE_TAG:-latest}
+    <<: *hardening
+    tmpfs:
+      - /tmp:size=64m
+    command: ["python", "-m", "worker.queues.run_worker", "source", "results"]
+    environment: *api-env
+    networks:
+      - backend
+    depends_on:
+      worker-discovery:
+        condition: service_started
+    restart: unless-stopped
+
+  web:
+    image: ${IMAGE_PREFIX:-ghcr.io/echoofcode/routes}/routes-web:${IMAGE_TAG:-latest}
+    <<: *hardening
+    tmpfs:
+      - /tmp:size=64m
+      - /app/.next/cache:size=128m,uid=10001,gid=10001
+    environment:
+      API_INTERNAL_URL: http://api:8000
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+    networks:
+      - frontend
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ------------------------------------------------------------- Sandbox Infrastructure
+  sandbox-manager:
+    image: ${IMAGE_PREFIX:-ghcr.io/echoofcode/routes}/routes-sandbox-manager:${IMAGE_TAG:-latest}
+    <<: *hardening
+    tmpfs:
+      - /tmp:size=64m
+    environment:
+      SANDBOX_MANAGER_TOKEN: ${SANDBOX_MANAGER_TOKEN:?SANDBOX_MANAGER_TOKEN must be set}
+      GATEWAY_CONTROL_TOKEN: ${GATEWAY_CONTROL_TOKEN:?GATEWAY_CONTROL_TOKEN must be set}
+      DOCKER_API_URL: http://docker-proxy:2375
+      GATEWAY_CONTROL_URL: http://network-gateway:8080
+      GATEWAY_CONTAINER: routes-p1-gateway
+      GATEWAY_DEV_ALLOW_HOSTS: ${GATEWAY_DEV_ALLOW_HOSTS:-}
+      UPLOAD_VOLUME: routes_uploads
+      UPLOADS_DIR: /data/uploads
+      MAX_CRAWL_PAGES: ${MAX_CRAWL_PAGES:-25}
+      DISCOVERY_TIMEOUT_SECONDS: ${DISCOVERY_TIMEOUT_SECONDS:-600}
+      SOURCE_TIMEOUT_SECONDS: ${SOURCE_TIMEOUT_SECONDS:-900}
+      MAX_CONCURRENT_BUILD_RUNS: ${MAX_CONCURRENT_BUILD_RUNS:-1}
+    volumes:
+      - uploads:/data/uploads
+    networks:
+      - backend
+      - docker-control
+      - gateway-control
+    depends_on:
+      docker-proxy:
+        condition: service_started
+      network-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  docker-proxy:
+    image: ${IMAGE_PREFIX:-ghcr.io/echoofcode/routes}/routes-docker-proxy:${IMAGE_TAG:-latest}
+    <<: *hardening
+    environment:
+      ALLOWED_IMAGES: routes/discovery:local,routes/analyzer:local,routes/build-runner:local,routes/build-db:local,routes/test-runner:local
+      BUILD_IMAGES: routes/build-runner:local
+      MAX_BUILD_MEMORY_BYTES: "4294967296"
+      MAX_BUILD_TMPFS_BYTES: "3221225472"
+      UPLOAD_VOLUME: routes_uploads
+      GATEWAY_CONTAINER: routes-p1-gateway
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - docker-control
+    restart: unless-stopped
+
+  network-gateway:
+    image: ${IMAGE_PREFIX:-ghcr.io/echoofcode/routes}/routes-network-gateway:${IMAGE_TAG:-latest}
+    container_name: routes-p1-gateway
+    <<: *hardening
+    environment:
+      GATEWAY_CONTROL_TOKEN: ${GATEWAY_CONTROL_TOKEN:?GATEWAY_CONTROL_TOKEN must be set}
+      GATEWAY_DEV_ALLOW_HOSTS: ${GATEWAY_DEV_ALLOW_HOSTS:-}
+      CONTROL_SUBNET: ${ROUTES_CONTROL_SUBNET:-172.31.250.0/28}
+    sysctls:
+      net.ipv4.ip_forward: "0"
+    networks:
+      - gateway-control
+      - egress
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+networks:
+  frontend: {}
+  backend:
+    internal: true
+  docker-control:
+    internal: true
+  gateway-control:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${ROUTES_CONTROL_SUBNET:-172.31.250.0/28}
+  egress: {}
+
+volumes:
+  postgres_data: {}
+  redis_data: {}
+  uploads:
+    name: routes_uploads
+

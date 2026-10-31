@@ -1,0 +1,203 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-python:
+    name: Lint & Format Check (Python)
+    runs-on: ubuntu-latest
+    # TODO: Address 302 pre-existing ruff lint issues and 148 unformatted files across the repository.
+    # Set to continue-on-error: true to avoid blocking the pipeline on pre-existing style violations.
+    continue-on-error: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install ruff
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Check code formatting (check-only)
+        run: ruff format --check .
+
+      - name: Lint codebase (check-only)
+        run: ruff check .
+
+  lint-and-typecheck-frontend:
+    name: Lint & Typecheck (Next.js Frontend)
+    runs-on: ubuntu-latest
+    # TODO: Address any pre-existing frontend ESLint or TypeScript issues in apps/web if discovered.
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint frontend code
+        run: bun run lint
+
+      - name: Run TypeScript typecheck
+        run: bun run typecheck
+
+  test-python:
+    name: Test & Coverage (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies and workspace packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e packages/shared -e packages/core -e packages/storage -e apps/cli -e "services/api[test]" pytest pytest-cov pytest-asyncio
+
+      - name: Run pytest with test coverage
+        run: |
+          pytest -q \
+            --cov=routes_shared \
+            --cov=routes_core \
+            --cov=routes_storage \
+            --cov=routes_cli \
+            --cov=app \
+            --cov-report=xml:coverage.xml \
+            --cov-report=term \
+            packages/shared/tests \
+            packages/core/tests \
+            packages/storage/tests \
+            apps/cli/tests \
+            services/api/tests
+
+      - name: Upload code coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage-report
+          path: coverage.xml
+          retention-days: 14
+
+  build-frontend:
+    name: Build Next.js Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build Next.js application
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+          API_INTERNAL_URL: http://api:8000
+        run: bun run build
+
+  security-scan:
+    name: Dependency Vulnerability Audit
+    runs-on: ubuntu-latest
+    # TODO: Review and remediate any pre-existing advisory notices reported by audits.
+    continue-on-error: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Audit Python dependencies
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip install -e packages/shared -e packages/core -e packages/storage -e apps/cli -e "services/api[test]"
+          pip-audit --desc on
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Audit Frontend dependencies
+        working-directory: apps/web
+        run: |
+          bun install --frozen-lockfile
+          bun pm audit
+
+  docker-build-smoke:
+    name: Docker Build Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API image (smoke test)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/api.Dockerfile
+          push: false
+          tags: routes/api:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Web image (smoke test)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/web.Dockerfile
+          push: false
+          tags: routes/web:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Sandbox Manager image (smoke test)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/sandbox-manager.Dockerfile
+          push: false
+          tags: routes/sandbox-manager:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
