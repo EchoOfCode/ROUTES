@@ -23,6 +23,7 @@ from source_analyzer.profiling.profile import build_profile
 from source_analyzer.static_analysis.headers import check_security_headers
 from source_analyzer.static_analysis.semgrep_runner import SemgrepFailed, run_semgrep
 from source_analyzer.vuln_classes import VULN_CLASSES, AnalysisContext
+from source_analyzer.vuln_classes.base import snapshot_for
 
 WORK = Path(os.environ.get("ROUTES_WORK_DIR", "/work"))
 
@@ -112,6 +113,20 @@ def analyse(root: Path, kind: str, target_host: str) -> dict:
                     f["snapshot"] = None
                     snapshot_failures += 1
             findings.extend(plugin_findings)
+        # Semgrep-sourced findings have no plugin behind them, but a snapshot
+        # is what makes a finding remediable at all (worker.fix_table has
+        # deterministic fixes for several of these rules), so build one for
+        # any that landed in a file this run already parsed.
+        for f in findings:
+            if "snapshot" in f or not f.get("file") or not f.get("line"):
+                continue
+            try:
+                snapshot = snapshot_for(f, ctx)
+                f["snapshot"] = {"file": snapshot.file, "start_line": snapshot.start_line,
+                                 "end_line": snapshot.end_line, "code": snapshot.code}
+            except Exception:  # noqa: BLE001
+                f["snapshot"] = None
+
         if snapshot_failures:
             warnings.append(f"{snapshot_failures} finding(s) could not have a code snapshot built for them.")
         warnings.extend(ctx.warnings)

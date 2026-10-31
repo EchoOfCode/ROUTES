@@ -14,6 +14,8 @@ class RemediationIterationOut(BaseModel):
     test_results: dict
     rescan_diff: dict
     failure_output: str | None
+    fix_source: str | None
+    fix_note: str | None
     created_at: datetime
 
 

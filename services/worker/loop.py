@@ -14,8 +14,10 @@ Per run:
      failure (3 attempts total). If it never gates, NEEDS_HUMAN_REVIEW
      naming the gate's failed_check. Once gated, the same testbench is
      reused for every round (rule 6: frozen before the fix is generated).
-  2. Per round (up to MAX_ROUNDS): call LLM B for a candidate fix (already
-     parse/dependency/network validated, S6), verify it in the sandbox
+  2. Per round (up to MAX_ROUNDS): get a candidate fix - in round 1 from
+     the deterministic known-bad -> known-good table (S10c) if an entry
+     covers this rule, otherwise from LLM B (already parse/dependency/
+     network validated, S6) - then verify it in the sandbox
      (every exploit test must now pass, every benign test must still
      pass), then rescan the patched tree - success (rule 4) requires all
      of: verify passed, the original fingerprint is gone from the rescan,
@@ -38,6 +40,7 @@ from dataclasses import dataclass, field
 from routes_shared.fingerprint import normalize_snippet
 from routes_shared.remediation import FixConstraints, Snapshot, Testbench
 
+from worker.fix_table import lookup_fix
 from worker.gate import run_gate
 from worker.llm.client import LLMClient
 from worker.llm.llm_a import LlmAResult, call_llm_a
@@ -55,6 +58,8 @@ class RoundRecord:
     test_results: dict = field(default_factory=dict)
     rescan_diff: dict = field(default_factory=dict)
     failure_output: str | None = None
+    fix_source: str | None = None  # "llm_b" | "fix_table:<entry>"
+    fix_note: str | None = None    # what a fix-table rewrite changed
 
 
 @dataclass
@@ -113,28 +118,42 @@ def run_remediation_loop(*, finding: dict, snapshot: Snapshot, llm_a_client: LLM
 
         record = RoundRecord(round_no=round_no)
 
-        llm_b_result = call_llm_b(llm_b_client, llm_a_result, snapshot, constraints,
-                                  previous_failure=previous_failure)
-        if not llm_b_result.valid:
-            record.failure_output = "; ".join(llm_b_result.errors)
-            rounds.append(record)
-            previous_failure = record.failure_output
-            recent_hashes = []  # an invalid response is not a repeatable candidate
-            continue
+        # "Prefer a lookup table of known-bad -> known-good fixes and call
+        # LLM B only when no entry applies." Round 1 only: the table is
+        # deterministic, so re-running it after its candidate failed would
+        # produce the identical code and burn a round on a guaranteed
+        # oscillation. Rounds 2+ go to LLM B with the table's failure as
+        # context.
+        table_hit = lookup_fix(finding.get("rule_id", ""), snapshot.code) if round_no == 1 else None
+        if table_hit is not None:
+            candidate_code = table_hit.fixed_code
+            record.fix_source = f"fix_table:{table_hit.entry}"
+            record.fix_note = table_hit.note
+        else:
+            llm_b_result = call_llm_b(llm_b_client, llm_a_result, snapshot, constraints,
+                                      previous_failure=previous_failure)
+            if not llm_b_result.valid:
+                record.failure_output = "; ".join(llm_b_result.errors)
+                rounds.append(record)
+                previous_failure = record.failure_output
+                recent_hashes = []  # an invalid response is not a repeatable candidate
+                continue
+            candidate_code = llm_b_result.fixed_code
+            record.fix_source = "llm_b"
 
-        candidate_hash = _candidate_hash(llm_b_result.fixed_code)
+        candidate_hash = _candidate_hash(candidate_code)
         record.candidate_hash = candidate_hash
-        record.candidate_code = llm_b_result.fixed_code
+        record.candidate_code = candidate_code
         recent_hashes.append(candidate_hash)
         if len(recent_hashes) >= stagnation_rounds and len(set(recent_hashes[-stagnation_rounds:])) == 1:
             record.failure_output = "oscillation: identical candidate repeated"
             rounds.append(record)
             return LoopOutcome(status="needs_human_review",
-                               reason="oscillation: LLM B repeated the same candidate", rounds=rounds)
+                               reason="oscillation: the same candidate was produced again", rounds=rounds)
 
         verify_result = sandbox_runner.run(SandboxRunRequest(
             run_id=str(uuid.uuid4()), finding_id=finding_id, round_no=round_no,
-            files=[SandboxFile(path=snapshot.file, content=llm_b_result.fixed_code)],
+            files=[SandboxFile(path=snapshot.file, content=candidate_code)],
             testbench=SandboxFile(path=testbench.path, content=testbench.content),
         ))
         record.test_results = {
@@ -153,7 +172,7 @@ def run_remediation_loop(*, finding: dict, snapshot: Snapshot, llm_a_client: LLM
 
         rescan_result = sandbox_runner.run(SandboxRunRequest(
             run_id=str(uuid.uuid4()), finding_id=finding_id, round_no=round_no,
-            files=[SandboxFile(path=snapshot.file, content=llm_b_result.fixed_code)],
+            files=[SandboxFile(path=snapshot.file, content=candidate_code)],
             testbench=SandboxFile(path=testbench.path, content=testbench.content),
             source_ref=source_ref,
         ))

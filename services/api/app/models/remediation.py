@@ -38,6 +38,9 @@ class RemediationIteration(IdMixin, TimestampMixin, Base):
     batch_id: Mapped[str | None] = mapped_column(String(64))
     candidate_hash: Mapped[str | None] = mapped_column(String(64))
     candidate_code: Mapped[str | None] = mapped_column(Text)
+    # Where this round's candidate came from: "llm_b" or "fix_table:<entry>".
+    fix_source: Mapped[str | None] = mapped_column(String(64))
+    fix_note: Mapped[str | None] = mapped_column(Text)
     test_results: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     rescan_diff: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     failure_output: Mapped[str | None] = mapped_column(Text)

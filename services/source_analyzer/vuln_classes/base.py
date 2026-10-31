@@ -93,6 +93,33 @@ def _enclosing_function(root: Node, line_no: int) -> Node | None:
     return fn
 
 
+def snapshot_for(finding: dict, ctx: AnalysisContext) -> Snapshot:
+    """The enclosing-function slice for any finding with a file and a line.
+
+    Module-level (rather than only a VulnClass method) because Semgrep-sourced
+    findings have no plugin behind them but still need a snapshot to be
+    remediable - see the deterministic fix table in worker.fix_table.
+    """
+    file = finding["file"]
+    if ctx.sqli_analyzer is None or file not in ctx.sqli_analyzer.modules:
+        raise ValueError(f"No parsed module available for {file!r}; cannot build a snapshot.")
+    root = ctx.sqli_analyzer.modules[file].root
+    source = ctx.files[file]
+
+    fn = _enclosing_function(root, finding["line"])
+    if fn is not None:
+        return Snapshot(
+            file=file, start_line=fn.start_point[0] + 1, end_line=fn.end_point[0] + 1,
+            code=source[fn.start_byte:fn.end_byte].decode("utf-8", "replace"),
+        )
+
+    start_line = finding["line"]
+    end_line = finding.get("end_line") or start_line
+    lines = source.decode("utf-8", "replace").splitlines()
+    return Snapshot(file=file, start_line=start_line, end_line=end_line,
+                    code="\n".join(lines[start_line - 1:end_line]))
+
+
 class VulnClass(ABC):
     rule_prefix: str  # e.g. "routes.sqli", "routes.xss"
 
@@ -105,24 +132,7 @@ class VulnClass(ABC):
         """Cut the finding's enclosing function out of its file via
         tree-sitter. Falls back to just the finding's own line range if no
         enclosing function is found (e.g. a module-level constant)."""
-        file = finding["file"]
-        if ctx.sqli_analyzer is None or file not in ctx.sqli_analyzer.modules:
-            raise ValueError(f"No parsed module available for {file!r}; cannot build a snapshot.")
-        root = ctx.sqli_analyzer.modules[file].root
-        source = ctx.files[file]
-
-        fn = _enclosing_function(root, finding["line"])
-        if fn is not None:
-            return Snapshot(
-                file=file, start_line=fn.start_point[0] + 1, end_line=fn.end_point[0] + 1,
-                code=source[fn.start_byte:fn.end_byte].decode("utf-8", "replace"),
-            )
-
-        start_line = finding["line"]
-        end_line = finding.get("end_line") or start_line
-        lines = source.decode("utf-8", "replace").splitlines()
-        return Snapshot(file=file, start_line=start_line, end_line=end_line,
-                        code="\n".join(lines[start_line - 1:end_line]))
+        return snapshot_for(finding, ctx)
 
     def build_testbench(self, finding: dict, snapshot: Snapshot) -> Testbench:
         raise NotImplementedError("Testbench generation lands in S7.")

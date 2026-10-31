@@ -110,6 +110,7 @@ def run_remediate_job(job_id: str, finding_id: str) -> None:
                         candidate_hash=record.candidate_hash, candidate_code=record.candidate_code,
                         test_results=record.test_results, rescan_diff=record.rescan_diff,
                         failure_output=record.failure_output,
+                        fix_source=record.fix_source, fix_note=record.fix_note,
                     ))
 
                 if outcome.status == "fixed":
