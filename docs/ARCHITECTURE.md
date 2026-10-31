@@ -1,5 +1,34 @@
 # Architecture
 
+ROUTES has two front ends over one sandbox engine:
+
+- **`routes` CLI** (`apps/cli`, the primary interface). A local Python application: Typer commands, a Textual interactive interface and Rich output. It stores data in SQLite under `~/.routes` and calls the Sandbox Manager on `127.0.0.1`. See [CLI.md](CLI.md).
+- **Legacy web stack** (Compose profile `web`): Next.js → FastAPI → PostgreSQL/Redis/RQ workers. It is kept during the migration.
+
+Both use the same packages:
+- `routes_shared`: contracts, network policy, redaction, the event protocol and upload staging.
+- `routes_core`: the engine client, run supervision, result mapping, and the final-status, correlation and retention rules.
+
+So the sandboxes, the security controls and the assessment rules exist once.
+
+```
+routes CLI ──► routes_core ──► 127.0.0.1:8190 ──► sandbox-manager ─► docker-proxy ─► Docker
+    │                                               └─► network-gateway ─► internet
+    └─► routes_storage (SQLite, reports)
+```
+
+### CLI assessment flow
+
+1. `actions.prepare` validates the URL with `routes_shared.netpolicy` (the engine validates again) and classifies the source (GitHub URL, `.zip`, folder). It then selects or creates the project.
+2. The permission confirmation, the hidden token entry (private GitHub) and the repository-match question happen before anything starts.
+3. `service.AssessmentRunner`:
+   - creates the assessment and its steps in SQLite (one active assessment per project, enforced by a partial unique index);
+   - packs a folder into a temporary ZIP (excluded folders and binaries skipped, symlinks never followed, deleted after upload) and streams it to `POST /uploads`, or hands a token to `POST /credentials`;
+   - starts the runs.
+4. Each run is supervised by `routes_core.runner.poll_run` in its own thread. Progress (stages and measured counters) is mirrored into SQLite and sent to the UI. A run counts as finished only once the manager reports `finished_at`, which it sets after the container, network and gateway session are removed.
+5. Results are validated against the shared contracts, mapped and redacted by `routes_core.mapping` (the same code the workers use), and stored. `repo.finalize` applies the shared final-status rules, correlates endpoints if you confirmed the match, and applies retention (5 per project). It also deletes report folders of removed assessments.
+6. A heartbeat is written while the runner works. Assessments whose process stopped are marked *interrupted* on the next start.
+
 ## Services
 
 | Service | Image | Role | Networks |
@@ -8,12 +37,17 @@
 | `api` | routes/api | FastAPI REST API: auth, projects, integrations, assessments, results. Enqueues jobs. | frontend, backend |
 | `migrate` | routes/api | One-shot: `alembic upgrade head`, marks assessments interrupted by a restart as failed, purges staged uploads. | backend |
 | `worker-discovery` / `worker-source` | routes/worker | RQ workers. Request sandbox runs over HTTP, mirror progress into PostgreSQL, validate and persist results. **No Docker access.** | backend |
-| `sandbox-manager` | routes/sandbox-manager | Creates per-run networks, gateway sessions and disposable containers; supervises them and always cleans up. Holds private-repo tokens in memory only. | backend, docker-control, gateway-control |
+| `sandbox-manager` | routes/sandbox-manager | Creates per-run networks, gateway sessions and disposable containers; supervises them and always cleans up. Holds private-repo tokens in memory only. Stages uploads (`POST /uploads`). Published on `127.0.0.1:8190` for the CLI (token required). | cli, backend, docker-control, gateway-control |
 | `docker-proxy` | routes/docker-proxy | The only container with the Docker socket. Default-deny Docker API filter. | docker-control |
 | `network-gateway` | routes/network-gateway | Egress proxy and GitHub import path for sandboxes. Enforces destination policy. | gateway-control, egress (+ per-run networks) |
 | `postgres`, `redis` | upstream | Data and job queues. | backend |
 | `discovery-image`, `analyzer-image` | sandbox images | Build-only services; they exit immediately. Sandbox containers are started only by the Sandbox Manager. | none |
 | `sample-site` | python | `testing` profile only: deterministic site for tests. | egress |
+
+Profiles:
+- the default profile starts the engine only: `sandbox-manager`, `docker-proxy`, `network-gateway` and the image builders;
+- `web` adds `postgres`, `redis`, `migrate`, `api`, the workers and `web`;
+- `testing` adds `sample-site`.
 
 ```mermaid
 flowchart LR

@@ -272,3 +272,54 @@ def test_demux():
     frame = b"\x01\x00\x00\x00" + (5).to_bytes(4, "big") + b"hello" + b"\x02\x00\x00\x00" + (3).to_bytes(4, "big") + b"err"
     assert demux(frame) == b"helloerr"
     assert demux(b"plain text") == b"plain text"
+
+
+def test_structured_event_data_is_whitelisted():
+    text = ('ROUTES_EVENT {"stage":"discovering_pages","message":"3 of 25","data":{"pages_done":3,"page_limit":25,'
+            '"evil":{"x":1},"files":-1,"routes":true,"endpoints":"9"}}\n')
+    assert parse_events(text) == [{"stage": "discovering_pages", "message": "3 of 25",
+                                   "data": {"pages_done": 3, "page_limit": 25}}]
+
+
+# ------------------------------------------------------------------ /uploads
+
+
+def _client(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from manager.app import build_app
+
+    class Gw(FakeGateway):
+        async def health(self):
+            return True
+
+    return TestClient(build_app(settings(tmp_path), docker=FakeDocker(), gateway=Gw()))
+
+
+AUTH = {"Authorization": "Bearer " + "x" * 32}
+
+
+def test_upload_requires_token_and_stages_zip(tmp_path):
+    with _client(tmp_path) as c:
+        assert c.post("/uploads", content=b"PK\x03\x04data").status_code == 403
+        r = c.post("/uploads", content=b"PK\x03\x04data", headers=AUTH)
+        assert r.status_code == 201
+        upload_id = r.json()["upload_id"]
+        assert (tmp_path / upload_id / "source.zip").read_bytes() == b"PK\x03\x04data"
+        assert r.json()["size"] == 8
+
+
+@pytest.mark.parametrize("body,status", [(b"MZ not a zip", 400), (b"", 400)])
+def test_upload_rejects_non_zip_and_leaves_nothing(tmp_path, body, status):
+    with _client(tmp_path) as c:
+        r = c.post("/uploads", content=body, headers=AUTH)
+        assert r.status_code == status
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_upload_size_limit(tmp_path):
+    with _client(tmp_path) as c:
+        big = b"PK\x03\x04" + b"A" * (101 * 1024 * 1024)
+        r = c.post("/uploads", content=big, headers=AUTH)
+        assert r.status_code == 413
+    assert list(tmp_path.iterdir()) == []

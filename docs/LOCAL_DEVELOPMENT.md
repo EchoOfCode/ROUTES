@@ -3,7 +3,16 @@
 ## Prerequisites
 
 - Docker Desktop 4.30+ or Docker Engine 26+ (volume subpath mounts are required), Compose v2
-- Optional, for frontend work outside Docker: Bun 1.1+
+- Python 3.11+ for the CLI (3.12 recommended)
+- Optional, for the legacy frontend: Bun 1.1+
+
+## Compose profiles
+
+| Command | Starts |
+|---|---|
+| `routes engine up` (or `docker compose up -d`) | The sandbox engine only: what the CLI needs |
+| `docker compose --profile web up -d` | The legacy web stack as well (PostgreSQL, Redis, API, workers, Next.js) |
+| `... --profile testing` / `routes engine up --with-sample-site` | The bundled sample site |
 
 ## Environment variables (`.env`)
 
@@ -23,6 +32,9 @@ Create it with `scripts/init-env.sh` or `scripts/init-env.ps1`, which generate r
 | `DISCOVERY_TIMEOUT_SECONDS` / `SOURCE_TIMEOUT_SECONDS` | 600 / 900 | Sandbox wall-clock limits |
 | `ROUTES_CONTROL_SUBNET` | 172.31.250.0/28 | Fixed subnet of the gateway control network |
 | `GATEWAY_DEV_ALLOW_HOSTS` | *(empty)* | **Development only.** Hostnames allowed to resolve to private addresses (e.g. `sample-site`). |
+| `ROUTES_ENGINE_PORT` | 8190 | Host port (127.0.0.1) of the Sandbox Manager for the CLI |
+| `ROUTES_HOME` | `~/.routes` | CLI data directory (tests use a temporary one) |
+| `ROUTES_COMPOSE_FILE` | *(auto)* | Path to `docker-compose.yml` if `routes init` cannot find it |
 
 If you change `WEB_PORT`, add the matching origin to `ALLOWED_ORIGINS`.
 
@@ -39,15 +51,23 @@ If you change `WEB_PORT`, add the matching origin to `ALLOWED_ORIGINS`.
 All suites run inside containers, so no host Python is needed. Start Postgres and Redis first (`docker compose up -d postgres redis`).
 
 ```bash
-# Shared package
+# CLI, core and storage (host Python, in the venv)
+python -m pytest -q packages/shared/tests packages/core/tests packages/storage/tests
+cd apps/cli && python -m pytest -q tests && cd ../..      # Typer commands and Textual pilot tests (fake engine)
+
+# CLI against the real engine (sample site, ZIP, folder, GitHub, reports, retention, cleanup, proxy probes)
+GATEWAY_DEV_ALLOW_HOSTS=sample-site routes engine up --with-sample-site
+GATEWAY_DEV_ALLOW_HOSTS=sample-site python scripts/cli_e2e.py
+
+# Shared package (inside a container)
 docker run --rm -v "$PWD/packages/shared:/src" -w /src python:3.12-slim sh -c "pip install -q . pytest && pytest -q tests"
 
 # API (unit, integration, auth, ownership, lifecycle; uses the routes_test database)
-docker compose build migrate
-docker compose run --rm --no-deps -v "$PWD/services/api/tests:/srv/api/tests" migrate python -m pytest -q tests
+docker compose --profile web build migrate
+docker compose --profile web run --rm --no-deps -v "$PWD/services/api/tests:/srv/api/tests" migrate python -m pytest -q tests
 
 # Workers (lifecycle with a fake sandbox, real PostgreSQL)
-docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /srv -e PYTHONPATH=/srv:/srv/api \
+docker compose --profile web run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /srv -e PYTHONPATH=/srv:/srv/api \
   --entrypoint python migrate -m pytest -q worker/tests
 
 # Network gateway, Docker proxy, Sandbox Manager
@@ -68,8 +88,8 @@ docker run --rm --user 10001:10001 --read-only --tmpfs /tmp:uid=10001,gid=10001 
 # Frontend
 cd apps/web && bun install && bun run typecheck && bun run lint && bun run build
 
-# End to end (whole stack, sample site, fixture repository, docker-proxy probes, cleanup, retention)
-GATEWAY_DEV_ALLOW_HOSTS=sample-site docker compose --profile testing up -d --build
+# Legacy web stack end to end (sample site, fixture repository, docker-proxy probes, cleanup, retention)
+GATEWAY_DEV_ALLOW_HOSTS=sample-site docker compose --profile web --profile testing up -d --build
 python scripts/e2e.py --api http://127.0.0.1:8000
 ```
 
@@ -97,4 +117,8 @@ API_INTERNAL_URL=http://127.0.0.1:8000 bun run dev    # http://localhost:3000 (s
 | Private repository import fails with 403/404 | The token needs *Contents: Read-only* on that repository; fine-grained tokens must be approved by organisations that require it. Tokens are not stored; supply it again. |
 | Source analysis "unsupported" | Detailed analysis covers Next.js + pg only. Other stacks get a profile and general rules. |
 | Everything was interrupted by a restart | Expected: the `migrate` service marks interrupted assessments as failed on startup. Run a new assessment. |
-| Reset all data | `docker compose down -v` (deletes the database, queues and staged uploads). |
+| `routes doctor`: Sandbox Manager FAIL | The engine is not running or was started before the CLI port existed: `routes engine up`. |
+| `routes` prints help instead of opening the interface | Output is not a terminal (piped or redirected). Run it directly in a terminal. |
+| Symbols render as boxes | Your terminal font lacks them: set `ROUTES_ASCII=1`. |
+| Reset CLI data | Delete `~/.routes` (or your `ROUTES_HOME`). |
+| Reset all web-stack data | `docker compose --profile web down -v` (deletes the database, queues and staged uploads). |

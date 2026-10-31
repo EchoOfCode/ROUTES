@@ -225,3 +225,22 @@ def test_retention_after_completion(db, env):
     assert len(remaining) == 5
     assert first_id not in {r.id for r in remaining}
     assert db.get(ProjectIntegration, db.scalar(select(ProjectIntegration.id))) is not None
+
+
+def test_concurrent_discovery_and_source_keep_both_summaries(db):
+    """Regression: the source job used to overwrite discovery_summary with a stale copy."""
+    from routes_shared.contracts import DiscoveryResult, SourceResult
+
+    assessment, _ = make_assessment(db)
+    with get_sessionmaker()() as other:
+        stale = other.get(Assessment, assessment.id)
+        _ = stale.discovery_summary                       # source worker loaded the row earlier
+        with get_sessionmaker()() as first:
+            a1 = first.get(Assessment, assessment.id)
+            discovery.persist(first, a1, DiscoveryResult.model_validate(DISCOVERY_RESULT), {"requests": 1})
+            first.commit()                                # discovery finished in between
+        source.persist(other, stale, SourceResult.model_validate(SOURCE_RESULT))
+        other.commit()
+    db.expire_all()
+    summary = db.get(Assessment, assessment.id).discovery_summary
+    assert summary["pages_total"] == 2 and summary["source_framework"] == "Next.js"

@@ -24,6 +24,8 @@ from routes_shared.enums import (
     JobStatus,
 )
 
+from routes_core import status as status_rules
+
 from app.core.config import get_settings
 from app.core.errors import ApiError
 from app.models import Assessment, AssessmentJob, Project, ProjectIntegration
@@ -145,36 +147,20 @@ def maybe_finalize(db: Session, assessment_id: uuid.UUID, enqueue) -> bool:
 
 
 def compute_final_status(assessment: Assessment) -> tuple[str, str | None]:
-    jobs = {j.kind: j for j in assessment.jobs if j.kind != JobKind.RESULTS}
-    if assessment.cancel_requested:
-        return AssessmentStatus.CANCELLED, "The assessment was cancelled."
-    statuses = [j.status for j in jobs.values()]
-    completed = [s for s in statuses if s == JobStatus.COMPLETED]
-    if statuses and len(completed) == len(statuses):
-        return AssessmentStatus.COMPLETED, None
-    failures = [
-        f"{kind.capitalize()}: {j.error or 'did not complete'}" for kind, j in jobs.items() if j.status != JobStatus.COMPLETED
-    ]
-    if completed:
-        return AssessmentStatus.PARTIALLY_COMPLETED, " ".join(failures)
-    return AssessmentStatus.FAILED, " ".join(failures) or "The assessment could not complete."
+    return status_rules.compute_final_status(assessment.jobs, cancel_requested=assessment.cancel_requested)
 
 
 def apply_retention(db: Session, project_id: uuid.UUID) -> int:
     """Keep the newest N assessments; never delete active ones. Returns deleted count."""
-    limit = get_settings().assessment_history_limit
     rows = db.scalars(
         select(Assessment).where(Assessment.project_id == project_id).order_by(Assessment.created_at.desc())
     ).all()
-    deleted = 0
-    for a in rows[limit:]:
-        if a.status in ACTIVE_ASSESSMENT_STATUSES:
-            continue
+    victims = status_rules.retention_victims(rows, get_settings().assessment_history_limit)
+    for a in victims:
         db.delete(a)  # FK cascades remove pages, endpoints, technologies, findings, jobs.
-        deleted += 1
-    if deleted:
+    if victims:
         db.commit()
-    return deleted
+    return len(victims)
 
 
 def reconcile_after_restart(db: Session) -> int:

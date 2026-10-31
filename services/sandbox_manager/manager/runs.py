@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from routes_shared.contracts import EVENT_PREFIX
+from routes_shared.events import parse_events  # noqa: F401  (re-exported)
 
 from manager.config import Settings
 from manager.credentials import CredentialStore
@@ -56,20 +56,6 @@ class Run:
 
 class SandboxError(Exception):
     pass
-
-
-def parse_events(text: str) -> list[dict]:
-    events = []
-    for line in text.splitlines():
-        if not line.startswith(EVENT_PREFIX):
-            continue
-        try:
-            event = json.loads(line[len(EVENT_PREFIX):])
-        except ValueError:
-            continue
-        if isinstance(event, dict) and isinstance(event.get("stage"), str):
-            events.append({"stage": event["stage"][:64], "message": str(event.get("message", ""))[:300]})
-    return events[-MAX_EVENTS:]
 
 
 def parse_result(text: str) -> dict | None:

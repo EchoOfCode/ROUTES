@@ -9,21 +9,13 @@ from sqlalchemy import select
 
 from routes_shared.enums import TERMINAL_ASSESSMENT_STATUSES, JobStatus
 
+from routes_core.status import correlate as core_correlate
+
 from app.models import Assessment, AssessmentJob, DiscoveredEndpoint, ProjectIntegration
 from app.services import lifecycle
 from worker.jobs.common import db_session
 
 log = logging.getLogger("routes.worker.results")
-
-
-def _normalise(path: str) -> str:
-    """'/api/products/[id]' and '/api/products/{id}' and '/api/products/' compare equal-ish."""
-    parts = []
-    for seg in path.split("?")[0].strip("/").split("/"):
-        if seg.startswith(("[", "{", ":")) or seg.isdigit():
-            seg = "*"
-        parts.append(seg)
-    return "/" + "/".join(p for p in parts if p)
 
 
 def correlate(db, assessment: Assessment) -> int:
@@ -33,16 +25,7 @@ def correlate(db, assessment: Assessment) -> int:
     if integration is None or integration.match_status != "confirmed":
         return 0
     endpoints = db.scalars(select(DiscoveredEndpoint).where(DiscoveredEndpoint.assessment_id == assessment.id)).all()
-    source_routes = {_normalise(e.path): e for e in endpoints if e.origin == "source_route"}
-    matched = 0
-    for e in endpoints:
-        if e.origin == "source_route":
-            continue
-        route = source_routes.get(_normalise(e.path))
-        if route is not None:
-            e.details = {**(e.details or {}), "source_file": route.details.get("file"), "source_line": route.details.get("line")}
-            matched += 1
-    return matched
+    return core_correlate(endpoints)
 
 
 def run_results_job(job_id: str, assessment_id: str) -> None:
@@ -80,6 +63,3 @@ def run_results_job(job_id: str, assessment_id: str) -> None:
         removed = lifecycle.apply_retention(db, assessment.project_id)
         if removed:
             log.info("retention removed %d old assessment(s) for project %s", removed, assessment.project_id)
-
-
-

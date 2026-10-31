@@ -23,6 +23,22 @@ Repository code is never executed: there is no `npm install`, build or lifecycle
 
 Chromium runs with `--no-sandbox` because its namespace sandbox needs privileges the container deliberately lacks; the container is the isolation boundary.
 
+## Engine API for the CLI
+
+The Sandbox Manager is published on `127.0.0.1` only (`ROUTES_ENGINE_PORT`, default 8190), through a dedicated `cli` network that only the manager joins. Sandboxes never join it.
+
+- Every call needs `SANDBOX_MANAGER_TOKEN`, compared in constant time. The CLI reads the token from the engine env file, never from config.toml.
+- `POST /uploads` streams an archive (≤100 MB, ZIP signature checked, never opened) into the uploads volume.
+- An upload is claimed by exactly one run, and deleted when that run finishes, or after 30 minutes if no run claims it.
+- At most 8 uploads may be pending.
+- The CLI packs local folders itself:
+  - it only reads them;
+  - it skips dependency, build and VCS folders, binaries, and files over 50 MB;
+  - it never follows symlinks;
+  - it deletes the temporary ZIP immediately after upload.
+- Private-repository tokens are entered in a hidden field (Textual password input or `getpass`). They are never accepted as command-line arguments or recorded in the prompt history. They are sent once to `POST /credentials`; only the opaque handle is used afterwards.
+- `routes doctor` reads tool versions by running the sandbox images briefly with no network, a read-only filesystem, no capabilities, a non-root user and no mounts. Only ROUTES' own image code runs.
+
 ## Restricted Docker API (`infrastructure/docker-proxy`)
 
 The worker has no Docker access. The Sandbox Manager reaches Docker only through the proxy, which is default-deny:
@@ -73,3 +89,4 @@ Only `web` (and `api`, for scripts) are published, on 127.0.0.1. Security header
 - **Cookies are not port-isolated by browsers:** other applications on `localhost` can read the `routes_csrf` cookie. The Origin allow-list remains the effective CSRF defence; do not add origins of other local applications to `ALLOWED_ORIGINS`.
 - **Docker Desktop:** isolation relies on Docker's `internal` networks inside the Desktop VM, which behaves like Linux Docker. Rootless Docker or alternative runtimes have not been tested.
 - **Not dynamically verified:** findings are static evidence; there is no exploit confirmation in Phase 1.
+- **CLI port:** the `cli` network is not `internal`, which is what makes publishing to 127.0.0.1 possible. As a result, the Sandbox Manager (ROUTES' own code, not a sandbox) has an outbound route. Other local processes running as your user can reach the port but need the token. Keep the engine env file private.

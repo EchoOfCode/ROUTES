@@ -106,7 +106,7 @@ class Crawler:
             robots = Robots(robots_res.text() if robots_res.ok and "html" not in robots_res.content_type else None)
             sitemap_urls = await self._sitemaps(robots)
 
-            emit("discovering_pages", "Crawling public pages")
+            emit("discovering_pages", "Crawling public pages", pages_done=0, page_limit=self.config.max_pages)
             await self._crawl(root, sitemap_urls, robots)
 
             emit("inspecting_javascript", f"Inspecting {min(len(self.state.scripts), MAX_JS_FILES)} script files")
@@ -228,7 +228,8 @@ class Crawler:
             page.update(title=ex.title, is_login=ex.is_login, is_registration=ex.is_registration,
                         links_count=len(ex.links), forms_count=len(ex.forms), scripts_count=len(ex.scripts))
             self.state.pages.append(page)
-            emit("discovering_pages", f"{len(self.state.pages)} of up to {self.config.max_pages} pages inspected")
+            emit("discovering_pages", f"{len(self.state.pages)} of up to {self.config.max_pages} pages inspected",
+                 pages_done=len(self.state.pages), page_limit=self.config.max_pages)
 
             for form in ex.forms:
                 if not in_scope(form.action, self.hostname):

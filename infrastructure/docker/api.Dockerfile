@@ -6,8 +6,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN groupadd -g 10001 routes && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin routes
 
 COPY packages/shared /build/shared
+COPY packages/core /build/core
 COPY services/api /srv/api
-RUN pip install --no-cache-dir /build/shared "/srv/api[test]" && rm -rf /build /srv/api/build \
+RUN pip install --no-cache-dir /build/shared /build/core "/srv/api[test]" && rm -rf /build /srv/api/build \
     && mkdir -p /data/uploads && chown -R 10001:10001 /data
 
 WORKDIR /srv/api

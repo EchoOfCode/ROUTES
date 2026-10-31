@@ -1,7 +1,14 @@
 name: routes
 
 # ---------------------------------------------------------------------------
+# Profiles:
+#   (default)  the sandbox engine used by the ROUTES CLI: sandbox-manager,
+#              docker-proxy, network-gateway and the sandbox images
+#   web        the legacy browser stack: postgres, redis, api, workers, web
+#   testing    the bundled sample site for end-to-end tests
+#
 # Network layout (see docs/ARCHITECTURE.md):
+#   cli             host 127.0.0.1 -> sandbox-manager only (token required)
 #   frontend        web <-> api                       (only web is published)
 #   backend         api, workers, postgres, redis, sandbox-manager (internal)
 #   docker-control  sandbox-manager <-> docker-proxy  (internal)
@@ -31,6 +38,7 @@ x-api-env: &api-env
 services:
   # ------------------------------------------------------------- data stores
   postgres:
+    profiles: ["web"]
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -48,6 +56,7 @@ services:
     restart: unless-stopped
 
   redis:
+    profiles: ["web"]
     image: redis:7-alpine
     command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
     volumes:
@@ -63,6 +72,7 @@ services:
 
   # ------------------------------------------------------------- application
   migrate:
+    profiles: ["web"]
     build: { context: ., dockerfile: infrastructure/docker/api.Dockerfile }
     image: routes/api:local
     command: ["python", "-m", "app.cli"]
@@ -75,6 +85,7 @@ services:
     restart: "no"
 
   api:
+    profiles: ["web"]
     image: routes/api:local
     <<: *hardening
     tmpfs: ["/tmp:size=128m"]
@@ -96,6 +107,7 @@ services:
     restart: unless-stopped
 
   worker-discovery:
+    profiles: ["web"]
     build: { context: ., dockerfile: infrastructure/docker/worker.Dockerfile }
     image: routes/worker:local
     <<: *hardening
@@ -109,6 +121,7 @@ services:
     restart: unless-stopped
 
   worker-source:
+    profiles: ["web"]
     image: routes/worker:local
     <<: *hardening
     tmpfs: ["/tmp:size=64m"]
@@ -120,6 +133,7 @@ services:
     restart: unless-stopped
 
   web:
+    profiles: ["web"]
     build:
       context: .
       dockerfile: infrastructure/docker/web.Dockerfile
@@ -155,7 +169,10 @@ services:
       SOURCE_TIMEOUT_SECONDS: ${SOURCE_TIMEOUT_SECONDS:-900}
     volumes:
       - uploads:/data/uploads
-    networks: [backend, docker-control, gateway-control]
+    networks: [cli, backend, docker-control, gateway-control]
+    ports:
+      # For the ROUTES CLI on this machine only. Every call needs SANDBOX_MANAGER_TOKEN.
+      - "127.0.0.1:${ROUTES_ENGINE_PORT:-8190}:8100"
     depends_on:
       docker-proxy: { condition: service_started }
       network-gateway: { condition: service_healthy }
@@ -232,6 +249,9 @@ services:
     restart: unless-stopped
 
 networks:
+  # Not internal so the manager's port can be published to 127.0.0.1; only the
+  # manager is attached. Sandboxes never join it.
+  cli: {}
   frontend: {}
   backend:
     internal: true

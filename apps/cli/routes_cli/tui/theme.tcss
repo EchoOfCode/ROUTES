@@ -1,0 +1,219 @@
+/* ROUTES interactive interface. Neutral surfaces, one accent ("route teal"). */
+
+Screen {
+    background: #121315;
+    color: #e6e6e3;
+    layout: vertical;
+}
+
+#topbar {
+    height: 1;
+    padding: 0 2;
+    background: #17181b;
+    color: #8a8f98;
+}
+
+#body {
+    height: 1fr;
+    padding: 1 2 0 2;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: #2b2e33;
+    scrollbar-color-hover: #3a3e45;
+    scrollbar-background: #121315;
+}
+
+.view {
+    height: auto;
+}
+
+#prompt-area {
+    height: auto;
+    padding: 0 1;
+    background: #121315;
+    border-top: solid #24272b;
+}
+
+#prompt {
+    border: none;
+    background: #121315;
+    padding: 0 1;
+    height: 1;
+}
+
+#prompt:focus {
+    border: none;
+}
+
+#prompt > .input--suggestion {
+    color: #5c6068;
+}
+
+#prompt > .input--placeholder {
+    color: #5c6068;
+}
+
+#hint {
+    height: 1;
+    padding: 0 1;
+    color: #5c6068;
+}
+
+/* ---------------------------------------------------------------- home */
+#logo {
+    height: auto;
+    padding: 1 0 0 0;
+}
+
+.logo-line {
+    color: #36c2b4;
+    height: 1;
+}
+
+#tagline {
+    padding: 1 0 0 0;
+    color: #8a8f98;
+    height: auto;
+}
+
+#readiness {
+    padding: 1 0 1 0;
+    height: auto;
+}
+
+#menu {
+    height: auto;
+    width: 46;
+    padding: 0;
+}
+
+.section-title {
+    color: #e6e6e3;
+    text-style: bold;
+    padding: 1 0 0 0;
+    height: auto;
+}
+
+.muted {
+    color: #8a8f98;
+}
+
+/* --------------------------------------------------------- assessment */
+#assessment-head {
+    color: #8a8f98;
+    height: auto;
+}
+
+#progress {
+    height: auto;
+    padding: 1 0;
+}
+
+/* ------------------------------------------------------------ results */
+#findings-table {
+    height: auto;
+    max-height: 18;
+    background: #121315;
+    border: none;
+}
+
+#findings-table:focus {
+    border: none;
+}
+
+#findings-table > .datatable--header {
+    background: #121315;
+    color: #8a8f98;
+    text-style: none;
+}
+
+#findings-table > .datatable--cursor {
+    background: #1f3b38;
+    color: #e6e6e3;
+}
+
+#detail {
+    height: auto;
+    padding: 1 0 1 0;
+    border-top: solid #24272b;
+    margin-top: 1;
+}
+
+/* ------------------------------------------------------------- modals */
+ModalScreen {
+    align: center middle;
+    background: rgba(8, 9, 10, 0.70);
+}
+
+.dialog {
+    width: 72;
+    max-width: 90%;
+    height: auto;
+    padding: 1 2;
+    background: #1a1c1f;
+    border: solid #2b2e33;
+}
+
+.dialog-title {
+    text-style: bold;
+    color: #e6e6e3;
+    height: auto;
+}
+
+.dialog-body {
+    color: #b9bcc2;
+    padding: 1 0;
+    height: auto;
+}
+
+.dialog Input {
+    margin: 0 0 1 0;
+    background: #121315;
+    border: solid #2b2e33;
+}
+
+.dialog Input:focus {
+    border: solid #36c2b4;
+}
+
+.buttons {
+    height: auto;
+    align: right middle;
+}
+
+.buttons Button {
+    margin: 0 0 0 2;
+    min-width: 12;
+    height: 3;
+    border: none;
+    background: #24272b;
+    color: #e6e6e3;
+}
+
+.buttons Button:focus {
+    background: #2f3338;
+    text-style: bold;
+}
+
+.buttons Button.primary {
+    background: #1f7a71;
+    color: #ffffff;
+}
+
+.buttons Button.primary:focus {
+    background: #36c2b4;
+    color: #0c1312;
+}
+
+Toast {
+    background: #1a1c1f;
+    border-left: outer #36c2b4;
+    color: #e6e6e3;
+}
+
+Toast.-warning {
+    border-left: outer #e9a23b;
+}
+
+Toast.-error {
+    border-left: outer #ef5b5b;
+}

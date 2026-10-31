@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 import uuid
 from contextlib import contextmanager
 
-import httpx
 from sqlalchemy.orm import Session
+
+from routes_core.engine import EngineClient, EngineUnavailable
+from routes_core.runner import poll_run, summarise
 
 from routes_shared.enums import TERMINAL_ASSESSMENT_STATUSES, TERMINAL_JOB_STATUSES, JobStatus
 
@@ -35,42 +36,18 @@ def db_session():
         session.close()
 
 
-class ManagerClient:
+class ManagerClient(EngineClient):
+    """Engine client for workers: infrastructure failures become retryable errors."""
+
     def __init__(self) -> None:
-        self.client = httpx.Client(
-            base_url=os.environ.get("SANDBOX_MANAGER_URL", "http://sandbox-manager:8100"),
-            headers={"Authorization": f"Bearer {os.environ.get('SANDBOX_MANAGER_TOKEN', '')}"},
-            timeout=httpx.Timeout(20.0, connect=5.0),
-        )
+        super().__init__(os.environ.get("SANDBOX_MANAGER_URL", "http://sandbox-manager:8100"),
+                         os.environ.get("SANDBOX_MANAGER_TOKEN", ""))
 
     def start(self, spec: dict) -> dict:
         try:
-            r = self.client.post("/runs", json=spec)
-        except httpx.HTTPError as exc:
-            raise InfrastructureError("The Sandbox Manager is unavailable.") from exc
-        if r.status_code == 422:
-            raise ValueError(r.json().get("detail", "The sandbox request was rejected."))
-        if r.status_code != 201:
-            raise InfrastructureError(f"The Sandbox Manager refused the run ({r.status_code}).")
-        return r.json()
-
-    def get(self, run_id: str) -> dict | None:
-        try:
-            r = self.client.get(f"/runs/{run_id}")
-        except httpx.HTTPError:
-            return None
-        if r.status_code == 404:
-            return {"status": "failed", "error": "The sandbox run was lost (the Sandbox Manager restarted)."}
-        return r.json() if r.status_code == 200 else None
-
-    def cancel(self, run_id: str) -> None:
-        try:
-            self.client.delete(f"/runs/{run_id}")
-        except httpx.HTTPError:
-            pass
-
-    def close(self) -> None:
-        self.client.close()
+            return super().start(spec)
+        except EngineUnavailable as exc:
+            raise InfrastructureError(str(exc)) from exc
 
 
 def begin(db: Session, job_id: str) -> tuple[AssessmentJob, Assessment] | None:
@@ -115,30 +92,22 @@ def finish(db: Session, assessment_id) -> None:
         raise InfrastructureError("Could not enqueue result processing.")
 
 
-def supervise(db: Session, manager: ManagerClient, job: AssessmentJob, run: dict, *, deadline_seconds: int) -> dict:
+def supervise(db: Session, manager, job: AssessmentJob, run: dict, *, deadline_seconds: int) -> dict:
     """Poll the sandbox run, mirroring its progress into the job record."""
-    run_id = run["id"]
-    deadline = time.monotonic() + deadline_seconds
-    job.details = {**(job.details or {}), "run_id": run_id}
+    job.details = {**(job.details or {}), "run_id": run["id"]}
     db.commit()
-    last_seen: dict = run
-    while True:
-        state = manager.get(run_id)
-        if state is not None:
-            last_seen = state
-            events = state.get("events") or []
-            if events:
-                stages = list(dict.fromkeys(e["stage"] for e in events))
-                job.stage = events[-1]["stage"][:64]
-                job.message = (events[-1].get("message") or "")[:500]
-                job.stages_completed = stages[:-1]
-            db.commit()
-            if state.get("status") in ("completed", "failed", "cancelled", "timeout"):
-                return state
+
+    def on_state(state: dict) -> None:
+        progress = summarise(state.get("events") or [])
+        if progress.current_stage:
+            job.stage = progress.current_stage[:64]
+            job.message = progress.message[:500]
+            job.stages_completed = list(progress.completed_stages)
+        db.commit()
+
+    def should_cancel() -> bool:
         db.refresh(job.assessment)
-        if job.assessment.cancel_requested:
-            manager.cancel(run_id)
-        if time.monotonic() > deadline:
-            manager.cancel(run_id)
-            return {**last_seen, "status": "timeout", "error": "The assessment step exceeded its time limit."}
-        time.sleep(POLL_SECONDS)
+        return bool(job.assessment.cancel_requested)
+
+    return poll_run(manager, run, deadline_seconds=deadline_seconds, on_state=on_state,
+                    should_cancel=should_cancel, poll_seconds=POLL_SECONDS)

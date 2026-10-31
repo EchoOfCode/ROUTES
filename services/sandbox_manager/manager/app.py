@@ -1,4 +1,8 @@
-"""Sandbox Manager internal API (backend network only, bearer-token protected)."""
+"""Sandbox Manager API (bearer-token protected).
+
+Reachable from the backend network (web stack) and, for the ROUTES CLI, from
+127.0.0.1 on the host through the dedicated ``cli`` network.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +10,7 @@ import hmac
 import logging
 import os
 import re
+import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import Literal
@@ -14,6 +19,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
 from routes_shared.netpolicy import UrlPolicyError, parse_target_url
+from routes_shared.uploads import MAX_UPLOAD_BYTES, UploadRejected, ZipStager, discard_upload
 
 from manager.config import Settings
 from manager.credentials import CredentialStore
@@ -26,6 +32,8 @@ log = logging.getLogger("routes.sandbox")
 
 _NAME = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 _REF = re.compile(r"^[A-Za-z0-9._/-]{1,255}$")
+UNCLAIMED_UPLOAD_TTL = 1800  # seconds an upload may wait for its run
+MAX_PENDING_UPLOADS = 8
 
 
 def dev_hosts() -> frozenset[str]:
@@ -95,6 +103,13 @@ def build_app(settings: Settings | None = None, *, docker: DockerAPI | None = No
     app = FastAPI(title="ROUTES Sandbox Manager", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.runs = runs
     app.state.credentials = credentials
+    pending_uploads: dict[str, float] = {}  # upload_id -> staged at (removed when a run claims it)
+
+    def prune_uploads() -> None:
+        cutoff = time.time() - UNCLAIMED_UPLOAD_TTL
+        for upload_id in [u for u, t in pending_uploads.items() if t < cutoff]:
+            pending_uploads.pop(upload_id, None)
+            discard_upload(settings.uploads_dir, upload_id)
 
     def require_token(request: Request) -> None:
         header = request.headers.get("authorization", "")
@@ -117,6 +132,25 @@ def build_app(settings: Settings | None = None, *, docker: DockerAPI | None = No
     async def delete_credential(handle: str):
         credentials.discard(handle)
 
+    @app.post("/uploads", status_code=201, dependencies=[Depends(require_token)])
+    async def upload(request: Request):
+        """Stage a ZIP for one source run. The body is the raw archive (<= 100 MB).
+        It is never opened here; the analyzer sandbox validates and extracts it."""
+        prune_uploads()
+        if len(pending_uploads) >= MAX_PENDING_UPLOADS:
+            raise HTTPException(status_code=429, detail="too many pending uploads")
+        declared = request.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="ZIP uploads are limited to 100 MB.")
+        try:
+            with ZipStager(settings.uploads_dir) as stager:
+                async for chunk in request.stream():
+                    stager.write(chunk)
+        except UploadRejected as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+        pending_uploads[stager.upload_id] = time.time()
+        return {"upload_id": stager.upload_id, "size": stager.size, "sha256": stager.sha256}
+
     @app.post("/runs", status_code=201, dependencies=[Depends(require_token)])
     async def create_run(body: dict):
         kind = body.get("kind")
@@ -135,6 +169,8 @@ def build_app(settings: Settings | None = None, *, docker: DockerAPI | None = No
                 host = ""
                 if spec.target_url:
                     host = parse_target_url(spec.target_url, dev_allow_hosts=dev_hosts()).hostname
+                if spec.upload_id:
+                    pending_uploads.pop(spec.upload_id, None)  # the run now owns (and deletes) it
                 run = runs.start("source", {**spec.model_dump(), "target_host": host})
             else:
                 raise ValueError("unknown run kind")

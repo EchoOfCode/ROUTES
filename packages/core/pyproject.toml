@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "routes-core"
+version = "0.2.0"
+description = "ROUTES assessment logic shared by the CLI and the web stack"
+requires-python = ">=3.11"
+dependencies = ["routes-shared", "pydantic>=2.7,<3", "httpx>=0.27,<1"]
+
+[tool.setuptools.packages.find]
+include = ["routes_core*"]

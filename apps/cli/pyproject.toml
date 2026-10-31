@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "routes-cli"
+version = "0.2.0"
+description = "ROUTES: local-first application security assessment from your terminal"
+requires-python = ">=3.11"
+dependencies = [
+    "routes-shared",
+    "routes-core",
+    "routes-storage",
+    "typer>=0.12",
+    "rich>=13.7",
+    "textual>=0.80",
+    "jinja2>=3.1",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+routes = "routes_cli.main:run"
+
+[tool.setuptools.packages.find]
+include = ["routes_cli*"]
+
+[tool.setuptools.package-data]
+routes_cli = ["tui/*.tcss", "reports/templates/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

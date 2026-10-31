@@ -55,6 +55,7 @@ def acquire(kind: str, work: Path) -> tuple[Path, list[str]]:
         notes.append(f"{report.skipped_excluded} file(s) in dependency or build folders were excluded.")
     if report.files_written == 0:
         raise ArchiveError("The archive did not contain any analysable files.")
+    emit("extracting", f"{report.files_written} files extracted", files=report.files_written)
     return src, notes
 
 
@@ -85,6 +86,9 @@ def analyse(root: Path, kind: str, target_host: str) -> dict:
     except SemgrepFailed as exc:
         warnings.append(str(exc))
         result["semgrep_failed"] = True
+    else:
+        emit("running_static_rules", f"Static rules reported {len(semgrep_findings)} potential issue(s)",
+             static_matches=len(semgrep_findings))
 
     js_files = profile.js_files()
     if profile.framework == "Next.js" and js_files:
@@ -114,6 +118,9 @@ def analyse(root: Path, kind: str, target_host: str) -> dict:
                     findings.append(sqli_finding(i))
             for exp in analyzer.helper_sinks_without_tainted_callers():
                 findings.append(sqli_inconclusive(exp))
+        flows = sum(1 for f in findings if f.get("type") == "SQL Injection" and f.get("status") == "potential")
+        emit("tracing_data_flow", f"{len(result['routes'])} route(s) traced, {flows} SQL injection flow(s) found",
+             routes=len(result["routes"]), sqli_flows=flows)
     elif profile.support_status != "unsupported":
         warnings.append("No Next.js source files were found to analyse.")
 

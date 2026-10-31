@@ -7,20 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 AUTHORISATION_STATEMENT = "I confirm that I own this website or have permission to assess it."
 
-_GITHUB_URL_RE = re.compile(
-    r"^(?:https?://)?(?:www\.)?github\.com/(?P<owner>[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/"
-    r"(?P<repo>[A-Za-z0-9._-]{1,100}?)(?:\.git)?/?(?:tree/(?P<ref>[A-Za-z0-9._/-]{1,255}))?/?$"
-)
-_REF_RE = re.compile(r"^[A-Za-z0-9._/-]{1,255}$")
-
-
-def validate_github_token(v: str | None) -> str | None:
-    if v is None or v.strip() == "":
-        return None
-    v = v.strip()
-    if not re.fullmatch(r"[A-Za-z0-9_]{20,400}", v):
-        raise ValueError("The access token format is not recognised.")
-    return v
+from routes_shared.github import GITHUB_URL_RE as _GITHUB_URL_RE  # noqa: E402
+from routes_shared.github import REF_RE as _REF_RE  # noqa: E402
+from routes_shared.github import validate_github_token  # noqa: E402,F401
 
 
 class ProjectCreate(BaseModel):
