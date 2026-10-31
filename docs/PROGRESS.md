@@ -380,6 +380,75 @@ $ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /sr
   Worth revisiting whether those two interface methods still have a purpose
   or should be removed.
 
+## S5 — SandboxRunner interface
+
+**Branch:** `feat/remediation-s5-sandbox-runner` (off `feat/remediation-loop`,
+after S6/S6b)
+**Status: DONE**
+
+### Files changed
+- `services/worker/sandbox/runner.py` (new) — `SandboxRunner` ABC,
+  `SandboxRunRequest`/`SandboxFile`/`TestResult`/`SandboxRunResult`
+  dataclasses, matching the input/output shape in the prompt exactly.
+- `services/worker/sandbox/fake.py` (new) — `FakeSandboxRunner` (records
+  every request, returns a pre-configured canned result) + `canned_pass`/
+  `canned_fail`/`canned_timeout`/`canned_missing_stub`.
+- `services/worker/sandbox/real.py` (new) — `RealSandboxRunner`: POSTs to
+  sandbox_manager's existing `/runs`, polls `/runs/{id}`, same pattern the
+  worker already uses for discovery/source. sandbox_manager itself is
+  untouched and has no run `kind` for this yet, so every real call gets
+  rejected (422) today — mapped to `status="error"`, never an exception.
+- `services/worker/sandbox/__init__.py` (new) — exports +
+  `build_sandbox_runner(kind, ...)`, the actual config-driven switch point.
+- `services/api/app/core/config.py` / `docker-compose.yml` / `.env.example` —
+  `SANDBOX_RUNNER_KIND` (default `fake`).
+- `docs/sandbox-contract.md` (new) — the interface contract, written for
+  the sandbox's owner, explicit that `status` is a mechanical signal (a
+  testbench run against *original* vulnerable code is expected to report
+  `"failed"` — that's the correct outcome at that point, not an error).
+- `services/worker/tests/test_sandbox_runner.py` (new) — all four canned
+  scenarios; `RealSandboxRunner`'s request shape, graceful handling of a
+  422 rejection and of an unreachable manager, mapping of a plausible
+  completed/failed/timeout/cancelled sandbox_manager response, and its own
+  deadline/cancel-on-timeout behavior.
+
+### Acceptance (raw output)
+
+```
+$ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /srv \
+    -e PYTHONPATH=/srv:/srv/api --entrypoint python migrate -m pytest -q worker/tests
+........................................                                [100%]
+40 passed, 1 warning in 1.14s
+
+$ docker compose run --rm --no-deps -v "$PWD/services/api/tests:/srv/api/tests" \
+    migrate python -m pytest -q tests
+................................                                         [100%]
+32 passed, 2 warnings in 4.43s
+
+$ docker compose config --quiet && echo "COMPOSE CONFIG VALID"
+COMPOSE CONFIG VALID
+```
+40 worker tests = 26 from S6/S6b + 14 new sandbox-runner tests.
+
+### Not working / stubbed / assumed
+
+- **`RealSandboxRunner` is plumbing, not a working path.** sandbox_manager
+  has no `kind` that accepts a verification run, so every real call is
+  rejected today (tested and confirmed graceful, not a crash). It becomes
+  functional only once sandbox_manager's owner adds a matching kind — no
+  interface change needed on this side when that happens.
+- **The response-mapping logic in `_to_result` is necessarily speculative**
+  — I guessed a plausible shape for what sandbox_manager's eventual
+  `result` payload might contain (`tests`/`stdout`/`stderr`/`duration_ms`),
+  modeled on its existing `Run.public()` response shape, since no real
+  implementation exists to confirm against. This may need adjusting once
+  the sandbox owner defines the actual payload.
+- **sandbox_manager, docker-proxy, and network-gateway source are
+  completely untouched** — confirmed via `git status`/diff on this branch;
+  nothing outside `services/worker/`, `services/api/app/core/config.py`,
+  `docker-compose.yml`, `.env.example`, and `docs/` changed.
+- Nothing calls `build_sandbox_runner` yet — that's S8 (loop controller).
+
 ## S1 — migration 0004, LLM A/B config, remove Ollama
 
 **Branch:** `feat/remediation-s1-config` (off `feat/remediation-loop`)

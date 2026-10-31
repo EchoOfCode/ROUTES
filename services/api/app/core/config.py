@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     llm_cache_mode: str = Field(default="live", alias="LLM_CACHE_MODE")
     llm_cache_dir: str = Field(default="/tmp/llm_cache", alias="LLM_CACHE_DIR")
 
+    # "fake": FakeSandboxRunner (canned results, no real execution). "real":
+    # RealSandboxRunner (HTTP to sandbox_manager) - not yet functional until
+    # sandbox_manager's owner adds a matching run kind. Switching is this one
+    # flag, never a code change.
+    sandbox_runner_kind: str = Field(default="fake", alias="SANDBOX_RUNNER_KIND")
+
     batch_size: int = Field(default=8, alias="BATCH_SIZE")
     llm_concurrency: int = Field(default=4, alias="LLM_CONCURRENCY")
     max_rounds: int = Field(default=5, alias="MAX_ROUNDS")
