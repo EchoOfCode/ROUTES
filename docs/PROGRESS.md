@@ -882,3 +882,64 @@ $ docker compose run --rm --no-deps -v "$PWD/services/api/tests:/srv/api/tests" 
   dedicated state - matches what the enum already supports, not a new gap.
 - The cancel **endpoint** itself doesn't exist yet - this step only builds
   the mechanism the endpoint (S9b) will set a flag for.
+
+## S9b — API endpoints
+
+**Branch:** `feat/remediation-s9b-api` (off `feat/remediation-loop`, after S9a).
+Second of three S9 sub-steps.
+**Status: DONE**
+
+### A pre-existing gap fixed along the way
+
+`FindingOut` (the API's response schema for a finding) never exposed
+`end_line`, `fingerprint`, or `snapshot` - all three exist on the DB model
+(added in M1/S8a) but the frontend could never see them. Not something
+this step introduced, but the UI (S9c) needs `snapshot` to show the
+"before" side of a diff and needs to know a finding's `rule_id`/snapshot
+presence to decide whether to offer "Fix this" at all, so extended
+`FindingOut` now rather than leave it broken for S9c to discover.
+
+### Files changed
+- `services/api/app/schemas/assessments.py` — `FindingOut` gains
+  `end_line`, `fingerprint`, `snapshot` (new nested `SnapshotOut` model).
+- `services/api/app/schemas/remediations.py` (new) — `RemediationOut`,
+  `RemediationIterationOut`.
+- `services/api/app/api/remediations.py` (new) — three endpoints, all
+  ownership-scoped through the existing `owned_assessment` chain:
+  - `POST /assessments/{id}/findings/{fid}/remediate` — rejects (422) a
+    non-SQLi finding or one with no snapshot; idempotent while a
+    `pending`/`running` remediation already exists for the finding
+    (returns the existing one rather than creating a duplicate); otherwise
+    creates the `Remediation` row and enqueues the `remediate` job.
+  - `GET /assessments/{id}/findings/{fid}/remediations/{rid}` — the
+    remediation plus its iterations (the timeline S9c will render).
+  - `POST .../remediations/{rid}/cancel` — sets `cancel_requested` (S9a)
+    and cancels the RQ job if still queued; a no-op on an already-terminal
+    remediation.
+- `services/api/app/main.py` — registers the new router.
+- `services/api/tests/test_remediations.py` (new) — all three endpoints:
+  create+enqueue, idempotency while active, rejecting non-SQLi/no-snapshot
+  findings, fetching iterations, cross-user 404, and cancel (both the
+  active and already-terminal cases).
+
+### Acceptance (raw output)
+
+```
+$ docker compose run --rm --no-deps -v "$PWD/services/api/tests:/srv/api/tests" migrate python -m pytest -q tests
+........................................                                [100%]
+40 passed, 2 warnings in 5.43s
+```
+40 = 32 existing (confirms `FindingOut`'s extension didn't break anything
+already depending on it) + 8 new remediation-endpoint tests.
+
+### Not working / stubbed / assumed
+
+- **No rule-level validation beyond the prefix check** — `start_remediation`
+  only checks `rule_id.startswith("routes.sqli")`; it doesn't re-verify the
+  gate's known-bad-fix library actually covers this specific rule (S7 is
+  SQLi-wide, so this is fine today, but the two checks are maintained in
+  two different places and could drift).
+- **No pagination/limit on iterations** — `RemediationOut.iterations`
+  returns all of them; fine given `MAX_ROUNDS=5` caps the count hard, not
+  designed to scale beyond that.
+- Still nothing in `apps/web` calls any of this — that's S9c.
