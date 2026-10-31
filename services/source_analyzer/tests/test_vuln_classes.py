@@ -3,6 +3,7 @@ itself is unchanged and still covered end-to-end by test_analysis.py."""
 
 import pytest
 
+from routes_shared.remediation import Snapshot
 from source_analyzer.vuln_classes import VULN_CLASSES, SqliVulnClass, XssVulnClass
 from source_analyzer.vuln_classes.base import VulnClass
 
@@ -20,8 +21,8 @@ def test_each_plugin_satisfies_the_interface():
 
 
 def test_unimplemented_pipeline_stages_raise_not_implemented():
-    # build_snapshot is real as of S4 - see test_snapshot.py. The rest still
-    # await S6/S7.
+    # build_snapshot (S4) and fix_constraints (S6) are real now. The rest
+    # still await S7.
     for plugin in VULN_CLASSES:
         with pytest.raises(NotImplementedError):
             plugin.build_testbench({}, snapshot=None)
@@ -29,5 +30,14 @@ def test_unimplemented_pipeline_stages_raise_not_implemented():
             plugin.exploit_assertions({})
         with pytest.raises(NotImplementedError):
             plugin.benign_assertions({})
-        with pytest.raises(NotImplementedError):
-            plugin.fix_constraints({}, snapshot=None)
+
+
+def test_fix_constraints_derives_from_the_snapshot():
+    snapshot = Snapshot(file="app/api/search/route.ts", start_line=4, end_line=8, code="...")
+    for plugin in VULN_CLASSES:
+        constraints = plugin.fix_constraints({}, snapshot)
+        assert constraints.file == snapshot.file
+        assert constraints.start_line == snapshot.start_line
+        assert constraints.end_line == snapshot.end_line
+        assert constraints.forbid_new_dependencies is True
+        assert constraints.forbid_network_calls is True

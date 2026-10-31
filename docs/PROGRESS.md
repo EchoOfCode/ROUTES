@@ -195,6 +195,138 @@ one of which was corrected above) + 4 new `test_snapshot.py` tests.
   inherited by both plugins unchanged, since the extraction logic doesn't
   differ by vulnerability class — only `detect()` differs per plugin.
 
+## S6 — generic LLM client, LLM A/B, fix validation
+
+**Branch:** `feat/remediation-s6-llm-client` (off `feat/remediation-loop`, which
+now includes S1+S2+S3+S4)
+**Last commit:** not yet committed — pending review
+**Status: DONE**
+
+### Two architecture corrections made mid-step (not in the original file list)
+
+1. **Tree-sitter for the worker.** `validate_fix` needs to parse LLM B's
+   candidate code, but `tree_sitter`/tree-sitter grammars were only a
+   dependency of `source_analyzer` (sandbox-only, a different container).
+   Added them to `services/api/pyproject.toml` (the shared base image for
+   both API and worker) and wrote `services/worker/llm/validation.py` as its
+   **own**, independent ~25-line copy of the grammar-selection logic — not
+   an import from `source_analyzer`, since that package stays sandbox-only
+   by design. Confirmed with the user before doing this (option 1 of 2
+   offered).
+2. **`Snapshot`/`Testbench`/`Assertion`/`FixConstraints` moved to
+   `routes_shared`.** These were defined in `source_analyzer/vuln_classes/base.py`
+   (S3), but `llm_a.py`/`llm_b.py` need to consume a `Snapshot`/
+   `FixConstraints` too, and `source_analyzer` isn't importable from the
+   worker (same boundary as above). Moved the four dataclasses verbatim
+   into `packages/shared/routes_shared/remediation.py` — the one package
+   every service already installs — and made `vuln_classes/base.py` import
+   them from there instead of defining them. No behavior change, pure
+   relocation; did this without stopping to ask again since it's the same
+   category of fix as the already-approved tree-sitter change, and it uses
+   the project's existing shared-package convention rather than introducing
+   a new one.
+
+### Model/provider choice (discussed with the user)
+
+Asked what free provider to default to; chose a **mix**: LLM A = Groq
+(`llama-3.3-70b-versatile`), LLM B = OpenRouter
+(`qwen/qwen-2.5-coder-32b-instruct:free`, coder-tuned). Both speak the same
+OpenAI-compatible chat-completions shape, which settled the "what API shape
+does the generic client speak" question too. Both API keys are still blank
+in `.env.example` — only the endpoint/model defaults are committed.
+
+### Files changed
+- `services/worker/llm/client.py` (new) — generic `LLMClient`: OpenAI-compatible
+  `complete(messages)`, plus the cache mode (`live`/`record`/`replay`) rule 9
+  asks for. Cache key = sha256 of (endpoint, model, messages, temperature).
+- `services/worker/llm/llm_a.py` (new) — redacts the snapshot
+  (`redact_for_llm`, S2), calls LLM A, parses its `{"prompt_for_fix":...,
+  "testbench":...}` JSON response, **redacts LLM A's own output again**
+  (pipeline step 4), merges placeholder maps.
+- `services/worker/llm/llm_b.py` (new) — calls LLM B, strips markdown fences
+  from the response, restores real secrets via the placeholder map, then
+  validates via `validate_fix` — an invalid candidate never produces a
+  `fixed_code`.
+- `services/worker/llm/validation.py` (new) — the independent tree-sitter
+  check described above: candidate must parse, must not add a new
+  import/require, must not add a new network call, relative to the
+  original snapshot.
+- `packages/shared/routes_shared/remediation.py` (new) — `Snapshot`/
+  `Testbench`/`Assertion`/`FixConstraints`, relocated from `source_analyzer`
+  (see correction #2).
+- `services/source_analyzer/vuln_classes/base.py` — imports those four from
+  `routes_shared` instead of defining them; `fix_constraints()` is now
+  concrete (built from the snapshot) instead of `NotImplementedError`.
+- `services/api/pyproject.toml` — added `tree-sitter`/`tree-sitter-javascript`/
+  `tree-sitter-typescript` (same version pins as `source_analyzer`).
+- `services/api/app/core/config.py` — `llm_a_*`/`llm_b_*` now default to the
+  Groq/OpenRouter endpoints+models above (keys still blank); added
+  `llm_cache_mode` (default `live`), `llm_cache_dir` (default `/tmp/llm_cache`
+  — inside worker-remediate's existing tmpfs, no hardening change needed).
+- `docker-compose.yml` / `.env.example` — same new defaults and cache vars.
+- `services/worker/tests/test_llm_client.py` (new) — live/record/replay cache
+  behavior against a fake HTTP transport.
+- `services/worker/tests/test_llm_pipeline.py` (new) — the real proof of
+  rule 1: inspects what was actually POSTed to both fake LLMs and asserts
+  the real secret never appears in it; also covers LLM A's output being
+  re-redacted, and LLM B's validation rejecting a new-import fix, a
+  new-network-call fix, and unparseable code, while accepting a good fix
+  and correctly restoring the real secret.
+- `services/source_analyzer/tests/test_vuln_classes.py` — removed the (now
+  stale) assertion that `fix_constraints` still raises `NotImplementedError`;
+  added a real test for its derived output.
+
+### Acceptance (raw output)
+
+```
+$ docker run --rm -v "$PWD/packages/shared:/src" -w /src python:3.12-slim \
+    sh -c "pip install -q . pytest && pytest -q tests"
+....................................................                     [100%]
+52 passed in 0.05s
+
+$ docker run --rm --user 10001:10001 --read-only --tmpfs /tmp:uid=10001,gid=10001 \
+    --tmpfs /home/sandbox:uid=10001,gid=10001 --tmpfs /work:uid=10001,gid=10001 \
+    -w /srv routes/analyzer:local python -m pytest -q source_analyzer/tests
+..........................................                               [100%]
+42 passed, 1 warning in 6.31s
+
+$ docker compose run --rm --no-deps -v "$PWD/services/api/tests:/srv/api/tests" \
+    migrate python -m pytest -q tests
+................................                                         [100%]
+32 passed, 2 warnings in 4.75s
+
+$ docker compose run --rm --no-deps -v "$PWD/services/worker:/srv/worker" -w /srv \
+    -e PYTHONPATH=/srv:/srv/api --entrypoint python migrate -m pytest -q worker/tests
+......................                                                  [100%]
+22 passed, 1 warning in 1.13s
+```
+
+### Not working / stubbed / assumed
+
+- **No real LLM was ever called** — every test uses `httpx.MockTransport`.
+  The Groq/OpenRouter endpoints/models are configured but unverified against
+  the real providers; API keys are still blank.
+- **Fix-response validation criteria are my own judgment call**, not a
+  restated spec — the current prompt only says "with response validation"
+  without listing criteria (unlike the now-cancelled old spec, which did).
+  I implemented: must parse, no new imports, no new network calls. Confirm
+  this is the right bar before S8's loop depends on it.
+- **LLM A's JSON response format is assumed**, not specified —
+  `{"prompt_for_fix": "...", "testbench": "..."}`. If the chosen model
+  doesn't reliably return valid JSON for this, S7/S8 will need a repair/retry
+  step; S6 just surfaces a clear `LLMError` on a malformed response rather
+  than guessing.
+- **Cache persistence is limited**: `LLM_CACHE_DIR` defaults to
+  `/tmp/llm_cache`, inside worker-remediate's existing read-only-root tmpfs
+  — it does NOT survive a container restart. That's fine for proving the
+  mechanism works (this step's tests do exactly that), but S11 ("the demo
+  works offline") will need either a persistent volume, a repo-checked-in
+  cache directory, or to run record+replay within the same container
+  lifetime. Not decided yet — flagging for when S11 actually needs it.
+- Nothing calls `call_llm_a`/`call_llm_b` from the actual `remediate` job
+  yet — that's S8 (loop controller). `services/worker/jobs/remediate.py` is
+  still the M0 no-op stub.
+
 ## S1 — migration 0004, LLM A/B config, remove Ollama
 
 **Branch:** `feat/remediation-s1-config` (off `feat/remediation-loop`)

@@ -6,8 +6,13 @@ SqliAnalyzer/XssAnalyzer moved behind the interface with no behavior change
 (S3). build_snapshot() (S4) is a real, shared implementation: find the
 smallest tree-sitter function enclosing the finding's line, widened to
 include its export wrapper if any, so the slice stays a valid re-insertable
-unit. The rest of the pipeline (testbench, fix validation) still raises
-NotImplementedError until S6/S7 build real logic for it.
+unit. The rest of the pipeline (testbench) still raises NotImplementedError
+until S7 builds real logic for it.
+
+Snapshot/Testbench/Assertion/FixConstraints live in routes_shared, not here
+(see routes_shared.remediation) - worker-remediate needs to consume a
+Snapshot/FixConstraints too (S6), and routes_shared is the only package both
+source_analyzer and worker already install.
 """
 
 from __future__ import annotations
@@ -17,6 +22,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from tree_sitter import Node
+
+from routes_shared.remediation import Assertion, FixConstraints, Snapshot, Testbench
 
 from source_analyzer.structure.parser import FUNCTION_TYPES, walk
 
@@ -46,17 +53,6 @@ class AnalysisContext:
     sqli_analyzer: "SqliAnalyzer | None" = None
 
 
-@dataclass
-class Snapshot:
-    """The data-flow slice sent to LLM A/B: plain code, no LLM involved in
-    producing it (S4)."""
-
-    file: str
-    start_line: int
-    end_line: int
-    code: str
-
-
 # Climb at most this many parent levels above a matched function node looking
 # for an export wrapper (covers `export function f(){}` - 1 level - and
 # `export const f = () => {}` - arrow_function -> variable_declarator ->
@@ -84,34 +80,6 @@ def _enclosing_function(root: Node, line_no: int) -> Node | None:
             break
         node = parent
     return fn
-
-
-@dataclass
-class Testbench:
-    """A finding's frozen exploit/benign test file. Shape only - built out in S7."""
-
-    path: str
-    content: str
-
-
-@dataclass
-class Assertion:
-    """One testbench assertion. Shape only - built out in S7."""
-
-    name: str
-    category: str  # "exploit" | "benign"
-
-
-@dataclass
-class FixConstraints:
-    """What a candidate fix for this finding must satisfy. Shape only - built
-    out in S6 (fix-response validation)."""
-
-    file: str
-    start_line: int
-    end_line: int
-    forbid_new_dependencies: bool = True
-    forbid_network_calls: bool = True
 
 
 class VulnClass(ABC):
@@ -155,4 +123,8 @@ class VulnClass(ABC):
         raise NotImplementedError("Testbench generation lands in S7.")
 
     def fix_constraints(self, finding: dict, snapshot: Snapshot) -> FixConstraints:
-        raise NotImplementedError("Fix-response validation lands in S6.")
+        """Same for every vulnerability class: a candidate fix may only touch
+        the snapshot's own file/line-range, add no new dependencies, and add
+        no new network calls. See worker.llm.validation.validate_fix for
+        where this is actually checked."""
+        return FixConstraints(file=snapshot.file, start_line=snapshot.start_line, end_line=snapshot.end_line)
