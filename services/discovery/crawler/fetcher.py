@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from discovery.crawler.urls import in_scope, normalise
+from discovery.crawler.urls import dedupe_key, in_scope, normalise
 
 USER_AGENT = "ROUTES-Discovery/0.1 (authorised application assessment)"
 MAX_REDIRECTS = 5
@@ -30,6 +30,7 @@ class FetchResult:
     truncated: bool = False
     external_redirect: str | None = None
     redirects: list[str] = field(default_factory=list)
+    redirect_to_known: bool = False
 
     @property
     def content_type(self) -> str:
@@ -79,7 +80,10 @@ class Fetcher:
     async def close(self) -> None:
         await self.client.aclose()
 
-    async def get(self, url: str, *, max_bytes: int, accept: str | None = None) -> FetchResult:
+    async def get(self, url: str, *, max_bytes: int, accept: str | None = None,
+                  known: set[str] | None = None) -> FetchResult:
+        """``known`` holds dedupe keys already inspected: a redirect to one of
+        them stops without re-fetching the page."""
         result = FetchResult(url=url, final_url=url)
         current = url
         async with self._lock:
@@ -100,6 +104,11 @@ class Fetcher:
                                 result.error = "Redirect with an invalid location."
                                 return result
                             result.redirects.append(nxt)
+                            if known is not None and dedupe_key(nxt) in known:
+                                result.status = response.status_code
+                                result.final_url = nxt
+                                result.redirect_to_known = True
+                                return result
                             current = nxt
                             continue
                         result.final_url = current

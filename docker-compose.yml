@@ -1,5 +1,20 @@
 name: routes
 
+# ---------------------------------------------------------------------------
+# Network layout (see docs/ARCHITECTURE.md):
+#   frontend        web <-> api                       (only web is published)
+#   backend         api, workers, postgres, redis, sandbox-manager (internal)
+#   docker-control  sandbox-manager <-> docker-proxy  (internal)
+#   gateway-control sandbox-manager <-> network-gateway (internal, fixed subnet)
+#   egress          network-gateway only -> internet
+#   routes-sbx-*    created per run: one sandbox + the gateway (internal)
+# ---------------------------------------------------------------------------
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
 x-api-env: &api-env
   ROUTES_ENV: development
   DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?set in .env}:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/${POSTGRES_DB:-routes}
@@ -14,6 +29,7 @@ x-api-env: &api-env
   UPLOADS_DIR: /data/uploads
 
 services:
+  # ------------------------------------------------------------- data stores
   postgres:
     image: postgres:16-alpine
     environment:
@@ -45,6 +61,7 @@ services:
       retries: 20
     restart: unless-stopped
 
+  # ------------------------------------------------------------- application
   migrate:
     build: { context: ., dockerfile: infrastructure/docker/api.Dockerfile }
     image: routes/api:local
@@ -59,15 +76,18 @@ services:
 
   api:
     image: routes/api:local
+    <<: *hardening
+    tmpfs: ["/tmp:size=128m"]
     environment: *api-env
     volumes:
       - uploads:/data/uploads
     networks: [backend, frontend]
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
+      sandbox-manager: { condition: service_started }
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
       interval: 10s
@@ -75,12 +95,157 @@ services:
       retries: 10
     restart: unless-stopped
 
+  worker-discovery:
+    build: { context: ., dockerfile: infrastructure/docker/worker.Dockerfile }
+    image: routes/worker:local
+    <<: *hardening
+    tmpfs: ["/tmp:size=64m"]
+    command: ["python", "-m", "worker.queues.run_worker", "discovery", "results"]
+    environment: *api-env
+    networks: [backend]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  worker-source:
+    image: routes/worker:local
+    <<: *hardening
+    tmpfs: ["/tmp:size=64m"]
+    command: ["python", "-m", "worker.queues.run_worker", "source", "results"]
+    environment: *api-env
+    networks: [backend]
+    depends_on:
+      worker-discovery: { condition: service_started }
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/web.Dockerfile
+    image: routes/web:local
+    <<: *hardening
+    tmpfs: ["/tmp:size=64m", "/app/.next/cache:size=128m,uid=10001,gid=10001"]
+    environment:
+      API_INTERNAL_URL: http://api:8000
+    networks: [frontend]
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+
+  # ------------------------------------------------------ sandbox infrastructure
+  sandbox-manager:
+    build: { context: ., dockerfile: infrastructure/docker/sandbox-manager.Dockerfile }
+    image: routes/sandbox-manager:local
+    <<: *hardening
+    tmpfs: ["/tmp:size=64m"]
+    environment:
+      SANDBOX_MANAGER_TOKEN: ${SANDBOX_MANAGER_TOKEN}
+      GATEWAY_CONTROL_TOKEN: ${GATEWAY_CONTROL_TOKEN:?set in .env}
+      DOCKER_API_URL: http://docker-proxy:2375
+      GATEWAY_CONTROL_URL: http://network-gateway:8080
+      GATEWAY_CONTAINER: routes-p1-gateway
+      GATEWAY_DEV_ALLOW_HOSTS: ${GATEWAY_DEV_ALLOW_HOSTS:-}
+      UPLOAD_VOLUME: routes_uploads
+      UPLOADS_DIR: /data/uploads
+      MAX_CRAWL_PAGES: ${MAX_CRAWL_PAGES:-25}
+      DISCOVERY_TIMEOUT_SECONDS: ${DISCOVERY_TIMEOUT_SECONDS:-600}
+      SOURCE_TIMEOUT_SECONDS: ${SOURCE_TIMEOUT_SECONDS:-900}
+    volumes:
+      - uploads:/data/uploads
+    networks: [backend, docker-control, gateway-control]
+    depends_on:
+      docker-proxy: { condition: service_started }
+      network-gateway: { condition: service_healthy }
+      discovery-image: { condition: service_completed_successfully }
+      analyzer-image: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  docker-proxy:
+    build: { context: ., dockerfile: infrastructure/docker/docker-proxy.Dockerfile }
+    image: routes/docker-proxy:local
+    <<: *hardening
+    environment:
+      ALLOWED_IMAGES: routes/discovery:local,routes/analyzer:local
+      UPLOAD_VOLUME: routes_uploads
+      GATEWAY_CONTAINER: routes-p1-gateway
+    volumes:
+      # The only Docker socket mount in ROUTES. Requests are filtered by
+      # infrastructure/docker-proxy/docker_proxy/policy.py.
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [docker-control]
+    restart: unless-stopped
+
+  network-gateway:
+    build: { context: ., dockerfile: infrastructure/docker/gateway.Dockerfile }
+    image: routes/network-gateway:local
+    container_name: routes-p1-gateway
+    <<: *hardening
+    environment:
+      GATEWAY_CONTROL_TOKEN: ${GATEWAY_CONTROL_TOKEN}
+      GATEWAY_DEV_ALLOW_HOSTS: ${GATEWAY_DEV_ALLOW_HOSTS:-}
+      CONTROL_SUBNET: ${ROUTES_CONTROL_SUBNET:-172.31.250.0/28}
+    sysctls:
+      net.ipv4.ip_forward: "0"
+    networks: [gateway-control, egress]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # Build-only services: they produce the sandbox images and exit. Sandbox
+  # containers are never started by Compose, only by the Sandbox Manager.
+  discovery-image:
+    build: { context: ., dockerfile: infrastructure/docker/discovery.Dockerfile }
+    image: routes/discovery:local
+    command: ["python", "-c", "print('routes/discovery:local is ready')"]
+    network_mode: none
+    restart: "no"
+
+  analyzer-image:
+    build: { context: ., dockerfile: infrastructure/docker/analyzer.Dockerfile }
+    image: routes/analyzer:local
+    command: ["python", "-c", "print('routes/analyzer:local is ready')"]
+    network_mode: none
+    restart: "no"
+
+  # ------------------------------------------------------ testing profile only
+  # docker compose --profile testing up -d  (and set GATEWAY_DEV_ALLOW_HOSTS=sample-site)
+  sample-site:
+    image: python:3.12-slim
+    profiles: ["testing"]
+    command: ["python", "/site/server.py", "8080"]
+    <<: *hardening
+    user: "65534:65534"
+    volumes:
+      - ./services/discovery/tests/sample_site:/site:ro
+    networks: [egress]
+    restart: unless-stopped
+
 networks:
   frontend: {}
   backend:
     internal: true
+  docker-control:
+    internal: true
+  gateway-control:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${ROUTES_CONTROL_SUBNET:-172.31.250.0/28}
+  egress: {}
 
 volumes:
   postgres_data: {}
   redis_data: {}
-  uploads: {}
+  uploads:
+    name: routes_uploads

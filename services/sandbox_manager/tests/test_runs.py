@@ -93,7 +93,7 @@ class FakeGateway:
 
 
 def settings(tmp_path):
-    return Settings(token="x" * 32, docker_url="", gateway_url="", gateway_token="", gateway_container="routes-network-gateway",
+    return Settings(token="x" * 32, docker_url="", gateway_url="", gateway_token="", gateway_container="routes-p1-gateway",
                     upload_volume="routes_uploads", uploads_dir=str(tmp_path), max_concurrent_runs=2, max_crawl_pages=25)
 
 

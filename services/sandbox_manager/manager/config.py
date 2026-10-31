@@ -21,7 +21,7 @@ class Settings:
             docker_url=os.environ.get("DOCKER_API_URL", "http://docker-proxy:2375"),
             gateway_url=os.environ.get("GATEWAY_CONTROL_URL", "http://network-gateway:8080"),
             gateway_token=os.environ.get("GATEWAY_CONTROL_TOKEN", ""),
-            gateway_container=os.environ.get("GATEWAY_CONTAINER", "routes-network-gateway"),
+            gateway_container=os.environ.get("GATEWAY_CONTAINER", "routes-p1-gateway"),
             upload_volume=os.environ.get("UPLOAD_VOLUME", "routes_uploads"),
             uploads_dir=os.environ.get("UPLOADS_DIR", "/data/uploads"),
             max_concurrent_runs=int(os.environ.get("MAX_CONCURRENT_RUNS", "4")),

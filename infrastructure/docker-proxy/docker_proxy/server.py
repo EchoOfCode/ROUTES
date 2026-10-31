@@ -29,7 +29,7 @@ def load_limits() -> Limits:
     return Limits(
         images=frozenset(i.strip() for i in os.environ.get("ALLOWED_IMAGES", "").split(",") if i.strip()),
         upload_volume=os.environ.get("UPLOAD_VOLUME", "routes_uploads"),
-        gateway_container=os.environ.get("GATEWAY_CONTAINER", "routes-network-gateway"),
+        gateway_container=os.environ.get("GATEWAY_CONTAINER", "routes-p1-gateway"),
         max_memory=int(os.environ.get("MAX_MEMORY_BYTES", str(2 * 1024**3))),
         max_nano_cpus=int(os.environ.get("MAX_NANO_CPUS", "2000000000")),
         max_pids=int(os.environ.get("MAX_PIDS", "512")),

@@ -1,0 +1,1 @@
+{ "name": "prisma-app", "dependencies": { "next": "15.0.0", "@prisma/client": "5.0.0" } }

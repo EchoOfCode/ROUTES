@@ -1,0 +1,8 @@
+{
+  // comments are allowed in tsconfig
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "@/*": ["./*"] },
+    "strict": true,
+  }
+}

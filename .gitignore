@@ -31,3 +31,4 @@ Thumbs.db
 # Local data
 /data/
 *.log
+apps/web/.next/

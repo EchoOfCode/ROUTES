@@ -1,0 +1,70 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+
+/* ROUTES design tokens: light, editorial, technical. One accent colour. */
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, monospace;
+
+  --color-canvas: #fafaf8;
+  --color-surface: #ffffff;
+  --color-sunken: #f4f3ef;
+  --color-line: #e7e5df;
+  --color-line-strong: #d6d3cb;
+  --color-ink: #1a1a18;
+  --color-ink-2: #3d3c38;
+  --color-muted: #6e6c66;
+  --color-faint: #9a978f;
+
+  --color-accent: #2a4fb5;
+  --color-accent-hover: #213f93;
+  --color-accent-soft: #eef2fb;
+
+  --color-sev-critical: #7a1414;
+  --color-sev-high: #b42318;
+  --color-sev-medium: #b54708;
+  --color-sev-low: #4b5565;
+  --color-sev-info: #2a4fb5;
+  --color-ok: #067647;
+  --color-warn: #b54708;
+  --color-bad: #b42318;
+
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 7px;
+
+  --shadow-pop: 0 1px 2px rgb(26 26 24 / 0.06), 0 6px 20px -8px rgb(26 26 24 / 0.18);
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+  body {
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  ::selection {
+    background: var(--color-accent-soft);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  code,
+  kbd,
+  .mono {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+  }
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}

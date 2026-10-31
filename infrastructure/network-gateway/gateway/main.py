@@ -44,7 +44,14 @@ def startup_networks() -> list[ipaddress.IPv4Network]:
 
 
 def control_peers() -> list[ipaddress.IPv4Network]:
-    """Restrict control callers to the control network when its subnet is known."""
+    """Restrict control callers to the control network.
+
+    CONTROL_SUBNET (set by docker-compose) is authoritative; otherwise fall
+    back to the networks attached at startup, narrowed to the one containing
+    the Sandbox Manager if it is resolvable."""
+    configured = os.environ.get("CONTROL_SUBNET", "").strip()
+    if configured:
+        return [ipaddress.ip_network(configured, strict=False)]
     nets = startup_networks()
     try:
         manager_ip = ipaddress.ip_address(socket.gethostbyname(os.environ.get("CONTROL_PEER_HOST", "sandbox-manager")))

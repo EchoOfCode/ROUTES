@@ -6,6 +6,8 @@ import os
 from dataclasses import dataclass
 
 MiB = 1024 * 1024
+# tmpfs mounts are owned by the sandbox user and private to it.
+OWNED = "uid=10001,gid=10001,mode=0700"
 
 
 @dataclass(frozen=True)
@@ -36,7 +38,7 @@ def discovery_profile() -> Profile:
         pids=256,
         timeout_seconds=_int("DISCOVERY_TIMEOUT_SECONDS", 600),
         # Chromium needs a writable HOME and /tmp; nothing is executable there.
-        tmpfs={"/tmp": "rw,noexec,nosuid,nodev,size=256m", "/home/sandbox": "rw,noexec,nosuid,nodev,size=64m"},
+        tmpfs={"/tmp": f"rw,noexec,nosuid,nodev,size=256m,{OWNED}", "/home/sandbox": f"rw,noexec,nosuid,nodev,size=64m,{OWNED}"},
         shm_size=128 * MiB,
     )
 
@@ -50,8 +52,8 @@ def analyzer_profile() -> Profile:
         pids=128,
         timeout_seconds=_int("SOURCE_TIMEOUT_SECONDS", 900),
         # /work holds the extracted, untrusted source and is never executable.
-        tmpfs={"/work": "rw,noexec,nosuid,nodev,size=768m", "/tmp": "rw,noexec,nosuid,nodev,size=256m",
-               "/home/sandbox": "rw,noexec,nosuid,nodev,size=32m"},
+        tmpfs={"/work": f"rw,noexec,nosuid,nodev,size=768m,{OWNED}", "/tmp": f"rw,noexec,nosuid,nodev,size=256m,{OWNED}",
+               "/home/sandbox": f"rw,noexec,nosuid,nodev,size=32m,{OWNED}"},
     )
 
 

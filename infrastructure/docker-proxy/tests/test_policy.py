@@ -8,7 +8,7 @@ from docker_proxy.policy import Denied, Limits, check_container_create, route
 from docker_proxy.server import DockerProxy
 
 LIMITS = Limits(images=frozenset({"routes/discovery:local", "routes/analyzer:local"}), upload_volume="routes_uploads",
-                gateway_container="routes-network-gateway")
+                gateway_container="routes-p1-gateway")
 QUERY = "name=routes-sbx-abc123"
 UUID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
@@ -195,15 +195,15 @@ def test_network_connect_only_sandbox_or_gateway():
     proxy = DockerProxy(LIMITS, inspector=FakeInspector({
         "/networks/routes-sbx-1": {"Name": "routes-sbx-1", "Labels": {"routes.sandbox": "true"}},
         "/networks/routes_backend": {"Name": "routes_backend", "Labels": {}},
-        "/containers/routes-network-gateway/json": {"Name": "/routes-network-gateway", "Config": {"Labels": {}}},
+        "/containers/routes-p1-gateway/json": {"Name": "/routes-p1-gateway", "Config": {"Labels": {}}},
         "/containers/routes-api-1/json": {"Name": "/routes-api-1", "Config": {"Labels": {}}},
     }))
     body = lambda c: json.dumps({"Container": c}).encode()  # noqa: E731
-    assert _authorise(proxy, "POST", "/networks/routes-sbx-1/connect", body("routes-network-gateway"))
+    assert _authorise(proxy, "POST", "/networks/routes-sbx-1/connect", body("routes-p1-gateway"))
     with pytest.raises(Denied):
         _authorise(proxy, "POST", "/networks/routes-sbx-1/connect", body("routes-api-1"))
     with pytest.raises(Denied):
-        _authorise(proxy, "POST", "/networks/routes_backend/connect", body("routes-network-gateway"))
+        _authorise(proxy, "POST", "/networks/routes_backend/connect", body("routes-p1-gateway"))
     with pytest.raises(Denied):
         _authorise(proxy, "DELETE", "/networks/routes_backend")
 

@@ -1,0 +1,306 @@
+# ROUTES Phase 1 Semgrep rules (bundled, run offline with --metrics=off).
+# Each rule's metadata carries the plain-language text shown to developers.
+rules:
+  # ---------------------------------------------------------------- secrets
+  - id: routes.secrets.aws-access-key
+    languages: [generic]
+    severity: ERROR
+    message: AWS access key ID committed to source.
+    pattern-regex: \b(AKIA|ASIA)[0-9A-Z]{16}\b
+    metadata:
+      routes_type: Hardcoded Secret
+      routes_title: Cloud access key written in the source code
+      routes_plain: >-
+        A value that looks like an AWS access key is written directly in the code. Anyone with access
+        to the repository can read it, and it may grant access to cloud resources.
+      routes_recommendation: >-
+        Remove the key from the code, rotate it with the provider, and load it at runtime from an
+        environment variable or a secrets manager.
+      routes_severity: high
+      routes_confidence: high
+      cwe: CWE-798
+      secret: true
+
+  - id: routes.secrets.github-token
+    languages: [generic]
+    severity: ERROR
+    message: GitHub token committed to source.
+    pattern-regex: \b(gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,})\b
+    metadata:
+      routes_title: GitHub access token written in the source code
+      routes_plain: >-
+        A value that looks like a GitHub access token is written directly in the code. It could let
+        someone act on GitHub with the token owner's permissions.
+
+  - id: routes.secrets.stripe-live-key
+    languages: [generic]
+    severity: ERROR
+    message: Stripe live secret key committed to source.
+    pattern-regex: \b(sk|rk)_live_[0-9A-Za-z]{16,}\b
+    metadata:
+      routes_title: Payment provider secret key written in the source code
+      routes_plain: >-
+        A value that looks like a live Stripe secret key is written directly in the code. It could be
+        used to make payment API calls on the account's behalf.
+
+  - id: routes.secrets.slack-token
+    languages: [generic]
+    severity: ERROR
+    message: Slack token committed to source.
+    pattern-regex: \bxox[abprs]-[A-Za-z0-9-]{10,}\b
+    metadata:
+      routes_title: Slack token written in the source code
+      routes_plain: A value that looks like a Slack token is written directly in the code.
+
+  - id: routes.secrets.private-key
+    languages: [generic]
+    severity: ERROR
+    message: Private key committed to source.
+    pattern-regex: -----BEGIN (RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY( BLOCK)?-----
+    metadata:
+      routes_title: Private key stored in the repository
+      routes_plain: >-
+        A private cryptographic key is stored in the repository. Anyone who can read the repository
+        could impersonate the system that owns this key.
+
+  - id: routes.secrets.db-connection-string
+    languages: [generic]
+    severity: WARNING
+    message: Database connection string with embedded credentials.
+    patterns:
+      - pattern-regex: \b(postgres(ql)?|mysql|mongodb(\+srv)?|redis)://[^\s:'"`/@]+:[^\s@'"`]+@[^\s'"`]+
+      - pattern-not-regex: (?i)://[^:]*:(password|pass|changeme|secret|postgres|example|user|\$\{|<)[^@]*@
+    metadata:
+      routes_title: Database password written in a connection string
+      routes_plain: >-
+        A database connection address that includes a username and password is written in the code.
+        Anyone with access to the repository could use it to connect to the database if it is reachable.
+      routes_severity: high
+      routes_confidence: medium
+
+  - id: routes.secrets.generic-assignment
+    languages: [generic]
+    severity: WARNING
+    message: Credential-like value assigned in source.
+    patterns:
+      - pattern-regex: (?i)\b[a-z0-9_]*(secret|passwd|password|api_?key|apikey|auth_?token|access_?token|private_?key)[a-z0-9_]*["']?\s*[:=]\s*["'][^"'\s]{12,}["']
+      - pattern-not-regex: (?i)(example|changeme|change_me|your[_-]|xxxx|placeholder|dummy|sample|test|redacted|\*\*\*|process\.env|<[a-z_]+>|\$\{)
+    paths:
+      exclude: ["*.lock", "package-lock.json", "*.md", "*.test.*", "*.spec.*", "__tests__/", "*.snap"]
+    metadata:
+      routes_title: Credential-like value written in the source code
+      routes_plain: >-
+        A value assigned to a name such as "secret", "password" or "api key" is written directly in the
+        code. If it is a real credential, anyone with access to the repository can read it.
+      routes_severity: medium
+      routes_confidence: low
+
+  # ------------------------------------------------------ command execution
+  - id: routes.exec.child-process-dynamic
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Shell command built from a non-constant value.
+    patterns:
+      - pattern-either:
+          - pattern: require("child_process").$FN($CMD, ...)
+          - pattern: child_process.$FN($CMD, ...)
+          - patterns:
+              - pattern-inside: |
+                  import { $FN } from "child_process";
+                  ...
+              - pattern: $FN($CMD, ...)
+          - patterns:
+              - pattern-inside: |
+                  import { $FN as $ALIAS } from "child_process";
+                  ...
+              - pattern: $ALIAS($CMD, ...)
+          - patterns:
+              - pattern-inside: |
+                  $CP = require("child_process");
+                  ...
+              - pattern: $CP.$FN($CMD, ...)
+          - patterns:
+              - pattern-inside: |
+                  const { $FN } = require("child_process");
+                  ...
+              - pattern: $FN($CMD, ...)
+      - metavariable-regex:
+          metavariable: $FN
+          regex: ^(exec|execSync)$
+      - pattern-not: $X("...", ...)
+      - pattern-not: $X.$Y("...", ...)
+    metadata:
+      routes_type: Unsafe Command Execution
+      routes_title: Shell command built from changing values
+      routes_plain: >-
+        The code runs a shell command whose text is built at runtime. If any part of it can come from a
+        user, they may be able to run their own commands on the server.
+      routes_recommendation: >-
+        Avoid the shell: use execFile/spawn with a fixed program and an argument array, and validate any
+        user-supplied argument against an allow-list.
+      routes_severity: high
+      routes_confidence: medium
+      cwe: CWE-78
+
+  - id: routes.exec.spawn-shell-true
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: spawn() with shell enabled.
+    pattern-either:
+      - pattern: '$CP.spawn($CMD, $ARGS, {..., shell: true, ...})'
+      - pattern: 'spawn($CMD, $ARGS, {..., shell: true, ...})'
+    metadata:
+      routes_type: Unsafe Command Execution
+      routes_title: Process started through a shell
+      routes_plain: >-
+        A process is started with the shell option enabled, so the arguments are interpreted by a shell.
+        If an argument can come from a user, they may be able to run additional commands.
+      routes_recommendation: Remove shell:true and pass arguments as an array to a fixed program.
+      routes_severity: medium
+      routes_confidence: medium
+      cwe: CWE-78
+
+  - id: routes.exec.eval-dynamic
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: eval/Function with a non-constant argument.
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: new Function(..., $X)
+          - pattern: Function(..., $X)
+      - pattern-not: eval("...")
+      - pattern-not: new Function("...")
+    metadata:
+      routes_type: Unsafe Code Execution
+      routes_title: Code evaluated from a changing value
+      routes_plain: >-
+        The code turns a runtime value into executable JavaScript. If that value can come from a user,
+        they may be able to run their own code on the server or in the browser.
+      routes_recommendation: Replace eval/new Function with explicit logic or a safe parser such as JSON.parse.
+      routes_severity: medium
+      routes_confidence: medium
+      cwe: CWE-95
+
+  # ------------------------------------------------------ insecure configuration
+  - id: routes.config.tls-verification-disabled
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: TLS certificate verification disabled.
+    pattern-either:
+      - pattern: "{..., rejectUnauthorized: false, ...}"
+      - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+      - pattern: process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+    metadata:
+      routes_type: Insecure Configuration
+      routes_title: Certificate checks turned off
+      routes_plain: >-
+        TLS certificate verification is disabled for an outgoing connection, so the application cannot
+        tell whether it is talking to the real server. Someone on the network could intercept the traffic.
+      routes_recommendation: >-
+        Remove rejectUnauthorized:false. If a private certificate authority is used, supply its
+        certificate with the "ca" option instead.
+      routes_severity: medium
+      routes_confidence: high
+      cwe: CWE-295
+
+  - id: routes.config.cors-wildcard
+    languages: [javascript, typescript]
+    severity: INFO
+    message: CORS allows any origin.
+    pattern-either:
+      - pattern: '{..., "Access-Control-Allow-Origin": "*", ...}'
+      - pattern: '$H.set("Access-Control-Allow-Origin", "*")'
+      - pattern: '$H.setHeader("Access-Control-Allow-Origin", "*")'
+      - pattern: '{..., key: "Access-Control-Allow-Origin", value: "*", ...}'
+    metadata:
+      routes_type: Insecure Configuration
+      routes_title: Any website may read these responses
+      routes_plain: >-
+        Responses allow requests from any website (Access-Control-Allow-Origin: *). This is fine for
+        public data, but not for endpoints that return private information.
+      routes_recommendation: List the specific origins that need access instead of "*".
+      routes_severity: low
+      routes_confidence: medium
+      cwe: CWE-942
+
+  - id: routes.config.public-env-secret
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: Secret-looking variable exposed to the browser via NEXT_PUBLIC_.
+    patterns:
+      - pattern: process.env.$NAME
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: ^NEXT_PUBLIC_.*(SECRET|PRIVATE|PASSWORD|PASSWD|SERVICE_ROLE|ADMIN|DATABASE_URL).*$
+    metadata:
+      routes_type: Insecure Configuration
+      routes_title: Secret-looking setting sent to the browser
+      routes_plain: >-
+        Next.js includes every NEXT_PUBLIC_ variable in the JavaScript sent to visitors. This variable's
+        name suggests it holds a secret, which would then be visible to anyone.
+      routes_recommendation: >-
+        Rename it without the NEXT_PUBLIC_ prefix and only read it in server-side code (route handlers,
+        server components or server actions).
+      routes_severity: medium
+      routes_confidence: medium
+      cwe: CWE-200
+
+  - id: routes.config.insecure-cookie
+    languages: [javascript, typescript]
+    severity: INFO
+    message: Cookie set without HttpOnly or Secure.
+    pattern-either:
+      - pattern: '$C.set($NAME, $VALUE, {..., httpOnly: false, ...})'
+      - pattern: '$C.cookie($NAME, $VALUE, {..., httpOnly: false, ...})'
+      - pattern: '$C.set($NAME, $VALUE, {..., secure: false, ...})'
+      - pattern: '$C.cookie($NAME, $VALUE, {..., secure: false, ...})'
+    metadata:
+      routes_type: Insecure Configuration
+      routes_title: Cookie set without protective flags
+      routes_plain: >-
+        A cookie is explicitly set without the HttpOnly or Secure flag. Session cookies without these
+        flags are easier to steal through injected scripts or unencrypted connections.
+      routes_recommendation: Set httpOnly:true and secure:true for cookies that hold session or authentication data.
+      routes_severity: low
+      routes_confidence: medium
+      cwe: CWE-1004
+
+  - id: routes.crypto.weak-hash
+    languages: [javascript, typescript]
+    severity: INFO
+    message: Weak hash algorithm.
+    pattern-either:
+      - pattern: $CRYPTO.createHash("md5")
+      - pattern: $CRYPTO.createHash("sha1")
+      - pattern: createHash("md5")
+      - pattern: createHash("sha1")
+    metadata:
+      routes_type: Weak Cryptography
+      routes_title: Outdated hash algorithm
+      routes_plain: >-
+        MD5 or SHA-1 is used. These are no longer considered secure for passwords, signatures or
+        integrity checks, although they are acceptable for non-security uses such as cache keys.
+      routes_recommendation: Use SHA-256 or stronger; for passwords use a dedicated algorithm such as Argon2id or bcrypt.
+      routes_severity: low
+      routes_confidence: low
+      cwe: CWE-328
+
+  # ---------------------------------------------------------------- XSS
+  - id: routes.xss.dangerously-set-inner-html
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: dangerouslySetInnerHTML with a non-constant value.
+    patterns:
+      - pattern: "<$EL dangerouslySetInnerHTML={{__html: $X}} />"
+      - pattern-not: '<$EL dangerouslySetInnerHTML={{__html: "..."}} />'
+    metadata:
+      routes_type: Cross-Site Scripting
+      routes_title: HTML inserted into the page without escaping
+      routes_plain: >-
+        A component inserts raw HTML into the page. If that HTML can contain user-supplied content, a
+        visitor could inject scripts that run in other visitors' browsers.
+      routes_recommendation: Render text normally, or sanitise the HTML with a library such as DOMPurify before inserting it.
+      routes_severity: medium
+      routes_confidence: low
+      cwe: CWE-79

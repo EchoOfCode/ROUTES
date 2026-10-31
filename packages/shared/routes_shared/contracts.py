@@ -210,6 +210,7 @@ class Finding(_Model):
     evidence_summary: Annotated[str, Field(max_length=2000)]
     technical_details: dict[str, Any] = Field(default_factory=dict)
     recommendation: Annotated[str, Field(max_length=2000)]
+    fingerprint: Annotated[str, Field(max_length=64)] | None = None
 
 
 class SourceResult(_Model):
