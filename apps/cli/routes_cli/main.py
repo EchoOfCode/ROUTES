@@ -291,6 +291,8 @@ def _run_assessment(ctx: Context, prepared: actions.Prepared) -> str:
     elif a.source_result is not None:
         con.print()
         con.print(R.findings_table([], g))
+    if interactive() and a.findings:
+        _prompt_next_steps_flow(ctx, a, source=prepared.plan.source.label if prepared.plan.source else None)
     return result.status
 
 
@@ -396,26 +398,10 @@ def testplan(source: Optional[str] = typer.Argument(None, help="GitHub URL, fold
     _print_generated(con, generated, path.resolve())
 
 
-@app.command()
-def verify(source: str = typer.Argument(..., help="GitHub repository URL, local folder or .zip file"),
-           tests: str = typer.Option(..., "--tests", "-t",
-                                     help="Test plan (JSON) to run, or 'auto' to generate one from the latest "
-                                          "`routes analyze` of this source"),
-           patch: Optional[str] = typer.Option(None, "--patch", help="Candidate patch (unified diff) to apply to a "
-                                                                     "temporary copy"),
-           ref: Optional[str] = typer.Option(None, "--ref", help="Branch, tag or commit for a GitHub source"),
-           private: bool = typer.Option(False, "--private", help="The GitHub repository is private (token prompted)"),
-           approve_script: list[str] = typer.Option([], "--approve-script",
-                                                    help="Allow this dependency's install scripts (repeatable; "
-                                                         "'<root>' for the project's own)"),
-           as_json: bool = typer.Option(False, "--json", help="Print the structured result as JSON"),
-           output: Optional[str] = typer.Option(None, "--output", "-o", help="Also write the JSON result to this file")):
-    """Build, run and test an application in a disposable sandbox.
-
-    The source is never modified: any patch is applied to a temporary copy
-    inside the sandbox. Exit codes: 0 verified run, 3 tests failed,
-    4 dynamic verification unsupported, 1 build failure or inconclusive.
-    """
+def _execute_build_and_run(ctx: Context, source: str, tests: str = "auto", patch: Optional[str] = None,
+                           ref: Optional[str] = None, private: bool = False,
+                           approve_script: list[str] | tuple = (), as_json: bool = False,
+                           output: Optional[str] = None) -> tuple[int, dict]:
     from pathlib import Path
 
     from routes_core.buildrun import EXIT_CODES, BuildRunInvalid, BuildRunRequest, submit, verification_of
@@ -424,7 +410,6 @@ def verify(source: str = typer.Argument(..., help="GitHub repository URL, local 
     from routes_core.sources import SourceError, classify
     from routes_cli.renderers import buildrun as BR
 
-    ctx = _ctx()
     notice = make_console(plain=as_json or not sys.stderr.isatty() or State.no_animation, stderr=True)
     try:
         spec = classify(source, ref=ref)
@@ -456,13 +441,12 @@ def verify(source: str = typer.Argument(..., help="GitHub repository URL, local 
 
     def on_state(state: dict) -> None:
         history = [p["phase"] for p in state.get("phase_history") or []]
-        new = history[len(seen_phases):]          # each phase is printed once, when the engine entered it
+        new = history[len(seen_phases):]
         work = [ph for ph in new if ph not in final_phases]
         closing = [ph for ph in new if ph in final_phases]
         for ph in work:
             seen_phases.append(ph)
             con.print(BR.phase_line(ph, g, current=True))
-        # The latest sandbox message belongs to the work phase, so it is printed before any closing phase.
         events = state.get("events") or []
         if events and events[-1].get("message") and events[-1]["message"] != last_msg[0]:
             last_msg[0] = events[-1]["message"]
@@ -499,7 +483,35 @@ def verify(source: str = typer.Argument(..., help="GitHub repository URL, local 
         out = _console()
         out.print()
         out.print(BR.render(final, glyphs(out)))
-    raise typer.Exit(EXIT_CODES.get(verification_of(final), 1))
+    return EXIT_CODES.get(verification_of(final), 1), final
+
+
+@app.command()
+def verify(source: str = typer.Argument(..., help="GitHub repository URL, local folder or .zip file"),
+           tests: str = typer.Option(..., "--tests", "-t",
+                                     help="Test plan (JSON) to run, or 'auto' to generate one from the latest "
+                                          "`routes analyze` of this source"),
+           patch: Optional[str] = typer.Option(None, "--patch", help="Candidate patch (unified diff) to apply to a "
+                                                                     "temporary copy"),
+           ref: Optional[str] = typer.Option(None, "--ref", help="Branch, tag or commit for a GitHub source"),
+           private: bool = typer.Option(False, "--private", help="The GitHub repository is private (token prompted)"),
+           approve_script: list[str] = typer.Option([], "--approve-script",
+                                                    help="Allow this dependency's install scripts (repeatable; "
+                                                         "'<root>' for the project's own)"),
+           as_json: bool = typer.Option(False, "--json", help="Print the structured result as JSON"),
+           output: Optional[str] = typer.Option(None, "--output", "-o", help="Also write the JSON result to this file")):
+    """Build, run and test an application in a disposable sandbox.
+
+    The source is never modified: any patch is applied to a temporary copy
+    inside the sandbox. Exit codes: 0 verified run, 3 tests failed,
+    4 dynamic verification unsupported, 1 build failure or inconclusive.
+    """
+    ctx = _ctx()
+    code, final = _execute_build_and_run(ctx, source, tests=tests, patch=patch, ref=ref, private=private,
+                                         approve_script=approve_script, as_json=as_json, output=output)
+    if not as_json and interactive():
+        _prompt_next_after_verify(ctx, source=source)
+    raise typer.Exit(code)
 
 
 # ------------------------------------------------------------------ results
@@ -546,18 +558,216 @@ def findings(id: Optional[str] = typer.Option(None, "--id", help="Show one findi
         con.print(f"\n[muted]Use[/] routes findings --id {items[0].seq:02d} [muted]for details.[/]")
 
 
-@app.command()
-def remediate(source: Optional[str] = typer.Argument(None, help="GitHub repository URL or local folder of the application"),
-              id: Optional[str] = typer.Option(None, "--id", "-f", help="Finding sequence number (e.g. 02) to remediate"),
-              assessment: Optional[str] = typer.Option(None, "--assessment", "-a", help="Assessment ID (prefix)"),
-              project: Optional[str] = typer.Option(None, "--project", "-p"),
-              output: str = typer.Option("remediation-patch.diff", "--output", "-o", help="Where to write the generated patch diff"),
-              as_json: bool = typer.Option(False, "--json", help="Print result as JSON")):
-    """Remediate a security finding using the dual-LLM remediation engine."""
+def _prompt_next_steps_flow(ctx: Context, a, source: Optional[str] = None) -> None:
+    if not interactive() or not sys.stdin.isatty():
+        return
+    con = _console()
+    code_findings = [f for f in a.findings if f.file and f.line]
+    if not a.findings:
+        return
+
+    con.print()
+    con.print("[heading]─── Select Next Action ──────────────────────────────────────────[/]")
+    if code_findings:
+        con.print("  [accent][1][/] [bold]Remediate all findings with AI loop[/] (Model A + Model B)  [bold cyan][Default][/]")
+        con.print("  [accent][2][/] Remediate a specific finding")
+        con.print("  [accent][3][/] Verify application in disposable Docker sandbox (routes verify)")
+        con.print("  [accent][4][/] Export assessment report (HTML)")
+        con.print("  [accent][0][/] Exit to shell")
+    else:
+        con.print("  [accent][1][/] Verify application in disposable Docker sandbox (routes verify)  [bold cyan][Default][/]")
+        con.print("  [accent][2][/] Export assessment report (HTML)")
+        con.print("  [accent][0][/] Exit to shell")
+
+    try:
+        choice = typer.prompt("Select option", default="1", show_default=False).strip()
+    except Exception:
+        return
+
+    src = source or a.source_label
+    if code_findings:
+        if choice in ("1", ""):
+            _run_remediate_flow(ctx, a, all_findings=True, source=src)
+        elif choice == "2":
+            _run_remediate_single_flow(ctx, a, source=src)
+        elif choice == "3":
+            _run_verify_flow(ctx, a, source=src)
+        elif choice == "4":
+            _run_report_flow(ctx, a)
+    else:
+        if choice in ("1", ""):
+            _run_verify_flow(ctx, a, source=src)
+        elif choice == "2":
+            _run_report_flow(ctx, a)
+
+
+def _run_remediate_flow(ctx: Context, a, all_findings: bool = True, source: Optional[str] = None, rounds: int = 3, output: str = "remediation-all.diff") -> None:
+    from pathlib import Path
+    from rich.table import Table
+    from routes_cli.remediation import remediate_batch_loop
+
+    con = _console()
+    g = glyphs(con)
+    targets = [f for f in a.findings if f.file and f.line]
+    if not targets:
+        con.print("[warn]No actionable code findings found to remediate.[/]")
+        return
+
+    report = remediate_batch_loop(targets, source_hint=source or a.source_label, max_rounds=rounds, console=con)
+    out_path = Path(output)
+    out_path.write_text(report.combined_patch, encoding="utf-8")
+
+    tbl = Table(title="REMEDIATION BATCH SUMMARY", box=None, header_style="bold cyan")
+    tbl.add_column("ID", style="bold")
+    tbl.add_column("Vulnerability")
+    tbl.add_column("Location")
+    tbl.add_column("Verdict", style="bold")
+    tbl.add_column("Attempts")
+
+    for r in report.results:
+        verdict_text = f"[ok]{g.done} FIXED[/]" if r.status == "fixed" else f"[warn]! REVIEW[/]"
+        tbl.add_row(r.finding_id, r.title, f"{r.file}:{r.line}", verdict_text, f"{r.rounds_used}/{rounds}")
+
+    con.print(tbl)
+    con.print(f"\n[ok]{g.done} Remediation Complete:[/] {report.fixed_count}/{report.total_findings} findings fixed.")
+    con.print(f"[ok]Combined patch written to[/] [path]{out_path.resolve()}[/]")
+
+    if interactive() and sys.stdin.isatty():
+        con.print()
+        con.print("[heading]─── Select Next Action ──────────────────────────────────────────[/]")
+        con.print("  [accent][1][/] [bold]Verify candidate patch in disposable Docker sandbox[/] (routes verify)  [bold cyan][Default][/]")
+        con.print("  [accent][2][/] Export assessment report (HTML)")
+        con.print("  [accent][0][/] Exit to shell")
+        try:
+            choice = typer.prompt("Select option", default="1", show_default=False).strip()
+        except Exception:
+            return
+        if choice in ("1", ""):
+            _run_verify_flow(ctx, a, patch=str(out_path), source=source or a.source_label)
+        elif choice == "2":
+            _run_report_flow(ctx, a)
+
+
+def _run_remediate_single_flow(ctx: Context, a, source: Optional[str] = None, rounds: int = 3, output: str = "remediation-patch.diff") -> None:
     from pathlib import Path
     from rich.panel import Panel
     from rich.syntax import Syntax
-    from routes_cli.remediation import run_cli_remediation
+    from routes_cli.remediation import remediate_finding_loop
+
+    con = _console()
+    g = glyphs(con)
+    code_findings = [f for f in a.findings if f.file and f.line]
+    if not code_findings:
+        con.print("[warn]No actionable code findings found to remediate.[/]")
+        return
+
+    con.print("\n[heading]Select Finding to Remediate:[/]")
+    for idx, f in enumerate(code_findings, 1):
+        con.print(f"  [accent][{idx}][/] #{f.seq:02d}: {escape(f.type)} in [path]{escape(f.file or '')}:{f.line}[/]")
+
+    try:
+        pick = typer.prompt(f"Select finding [1-{len(code_findings)}]", default="1").strip()
+        pick_idx = int(pick) - 1
+        if 0 <= pick_idx < len(code_findings):
+            target = code_findings[pick_idx]
+        else:
+            target = next((f for f in a.findings if pick.lstrip("0") == str(f.seq) or pick == f"{f.seq:02d}"), None)
+    except Exception:
+        target = code_findings[0]
+
+    if not target:
+        con.print("[err]Invalid finding selection.[/]")
+        return
+
+    con.print(f"\n[heading]AI REMEDIATION ENGINE (ITERATIVE LOOP)[/]  [muted]Finding #{target.seq:02d} · {escape(target.title)}[/]\n")
+    res = remediate_finding_loop(target, source_hint=source or a.source_label, max_rounds=rounds, console=con)
+    out_file = Path(output)
+    out_file.write_text(res.final_patch, encoding="utf-8")
+
+    if res.status == "fixed":
+        con.print(f"\n[ok]{g.done}[/] [bold]Verified Candidate Patch (Unified Diff - Attempt {res.rounds_used}/{rounds}):[/]")
+        con.print(Panel(Syntax(res.final_patch, "diff", theme="monokai", line_numbers=True), title=f"Patch for {escape(res.file)}", expand=False))
+        con.print(f"[ok]{g.done} Patch verification passed:[/] verified strictly against codebase.")
+    else:
+        con.print(f"\n[warn]! Remediation ended with status:[/] [bold]{res.status.upper()}[/]")
+    con.print(f"[ok]Patch written to[/] [path]{out_file.resolve()}[/]")
+
+    if interactive() and sys.stdin.isatty():
+        con.print()
+        con.print("[heading]─── Select Next Action ──────────────────────────────────────────[/]")
+        con.print("  [accent][1][/] [bold]Verify candidate patch in disposable Docker sandbox[/] (routes verify)  [bold cyan][Default][/]")
+        con.print("  [accent][2][/] Remediate all remaining findings (automated batch loop)")
+        con.print("  [accent][3][/] Export assessment report (HTML)")
+        con.print("  [accent][0][/] Exit to shell")
+        try:
+            choice = typer.prompt("Select option", default="1", show_default=False).strip()
+        except Exception:
+            return
+        if choice in ("1", ""):
+            _run_verify_flow(ctx, a, patch=str(out_file), source=source or a.source_label)
+        elif choice == "2":
+            _run_remediate_flow(ctx, a, all_findings=True, source=source or a.source_label)
+        elif choice == "3":
+            _run_report_flow(ctx, a)
+
+
+def _run_verify_flow(ctx: Context, a, patch: Optional[str] = None, source: Optional[str] = None) -> None:
+    src = source or a.source_label
+    if not src:
+        _console().print("[err]Cannot verify: source repository or folder is unknown.[/]")
+        return
+    con = _console()
+    con.print(f"\n[heading]Launching Docker Sandbox Verification for {escape(src)}[/]")
+    try:
+        code, final = _execute_build_and_run(ctx, source=src, tests="auto", patch=patch)
+    except Exception as exc:
+        con.print(f"[err]Sandbox verification could not run:[/] {exc}")
+        return
+
+    if interactive() and sys.stdin.isatty():
+        _prompt_next_after_verify(ctx, source=src)
+
+
+def _prompt_next_after_verify(ctx: Context, source: Optional[str] = None) -> None:
+    if not interactive() or not sys.stdin.isatty():
+        return
+    con = _console()
+    a = actions.latest(ctx)
+    if not a:
+        return
+    con.print()
+    con.print("[heading]─── Select Next Action ──────────────────────────────────────────[/]")
+    con.print("  [accent][1][/] [bold]Export full assessment report (HTML)[/]  [bold cyan][Default][/]")
+    con.print("  [accent][0][/] Exit to shell")
+    try:
+        choice = typer.prompt("Select option", default="1", show_default=False).strip()
+    except Exception:
+        return
+    if choice in ("1", ""):
+        _run_report_flow(ctx, a)
+
+
+def _run_report_flow(ctx: Context, a, fmt: str = "html") -> None:
+    con = _console()
+    path = reports.write_report(ctx.home, a, fmt)
+    con.print(f"\n[ok]Assessment report written to[/] [path]{path.resolve()}[/]")
+
+
+@app.command()
+def remediate(source: Optional[str] = typer.Argument(None, help="GitHub repository URL or local folder of the application"),
+              id: Optional[str] = typer.Option(None, "--id", "-f", help="Finding sequence number (e.g. 02) to remediate"),
+              all_findings: bool = typer.Option(False, "--all", "-a", help="Run remediation loop over all code findings in the assessment"),
+              rounds: int = typer.Option(3, "--rounds", "-r", help="Maximum correction attempts per finding (default: 3)"),
+              assessment: Optional[str] = typer.Option(None, "--assessment", help="Assessment ID (prefix)"),
+              project: Optional[str] = typer.Option(None, "--project", "-p"),
+              output: str = typer.Option("remediation-patch.diff", "--output", "-o", help="File to write generated patch diff"),
+              as_json: bool = typer.Option(False, "--json", help="Print result as JSON")):
+    """Remediate security findings using the dual-LLM iterative correction loop."""
+    from pathlib import Path
+    from rich.panel import Panel
+    from rich.syntax import Syntax
+    from rich.table import Table
+    from routes_cli.remediation import remediate_batch_loop, remediate_finding_loop
 
     ctx = _ctx()
     con = _console()
@@ -570,25 +780,115 @@ def remediate(source: Optional[str] = typer.Argument(None, help="GitHub reposito
     if a is None or not a.findings:
         _fail("No security findings to remediate. Run `routes analyze <source>` first.")
 
+    # Interactive choice if neither --all nor --id is given
     target = None
+    if not all_findings and not id:
+        if interactive() and sys.stdin.isatty():
+            con.print("\n[heading]─── Select Remediation Option ─────────────────────────────────[/]")
+            con.print("  [accent][1][/] [bold]Remediate all findings in automated AI loop[/] (Model A + Model B)  [bold cyan][Default][/]")
+            con.print("  [accent][2][/] Select a specific finding to remediate")
+            con.print("  [accent][0][/] Cancel")
+            try:
+                opt = typer.prompt("Select option", default="1", show_default=False).strip()
+            except Exception:
+                return
+            if opt in ("1", ""):
+                all_findings = True
+            elif opt == "2":
+                code_findings = [f for f in a.findings if f.file and f.line]
+                con.print("\n[heading]Code Findings Available for Remediation:[/]")
+                for idx, f in enumerate(code_findings, 1):
+                    con.print(f"  [accent][{idx}][/] #{f.seq:02d}: {escape(f.type)} in [path]{escape(f.file or '')}:{f.line}[/]")
+                try:
+                    pick = typer.prompt(f"Select finding [1-{len(code_findings)}]", default="1").strip()
+                    pick_idx = int(pick) - 1
+                    if 0 <= pick_idx < len(code_findings):
+                        target = code_findings[pick_idx]
+                    else:
+                        target = next((f for f in a.findings if pick.lstrip("0") == str(f.seq) or pick == f"{f.seq:02d}"), None)
+                except Exception:
+                    target = code_findings[0]
+                if not target:
+                    _fail("Invalid finding selection.")
+            else:
+                return
+        else:
+            all_findings = True
+
+    # Multi-finding loop mode
+    if all_findings:
+        targets = [f for f in a.findings if f.file and f.line]
+        if not targets:
+            _fail("No actionable code findings found in this assessment.")
+
+        report = remediate_batch_loop(targets, source_hint=source, max_rounds=rounds, console=con)
+        out_path = Path("remediation-all.diff" if output == "remediation-patch.diff" else output)
+        out_path.write_text(report.combined_patch, encoding="utf-8")
+
+        if as_json:
+            print(json.dumps({
+                "total": report.total_findings,
+                "fixed": report.fixed_count,
+                "human_review": report.human_review_count,
+                "combined_patch_file": str(out_path.resolve()),
+                "results": [r.__dict__ for r in report.results]
+            }, indent=2))
+            return
+
+        # Summary Table
+        tbl = Table(title="REMEDIATION BATCH SUMMARY", box=None, header_style="bold cyan")
+        tbl.add_column("ID", style="bold")
+        tbl.add_column("Vulnerability")
+        tbl.add_column("Location")
+        tbl.add_column("Verdict", style="bold")
+        tbl.add_column("Attempts")
+
+        for r in report.results:
+            verdict_text = f"[ok]{g.done} FIXED[/]" if r.status == "fixed" else f"[warn]! REVIEW[/]"
+            tbl.add_row(r.finding_id, r.title, f"{r.file}:{r.line}", verdict_text, f"{r.rounds_used}/{rounds}")
+
+        con.print(tbl)
+        con.print(f"\n[ok]{g.done} Remediation Complete:[/] {report.fixed_count}/{report.total_findings} findings fixed.")
+        con.print(f"[ok]Combined patch written to[/] [path]{out_path.resolve()}[/]")
+        con.print(f"\n[accent]Next:[/] verify in disposable Docker sandbox:\n  [bold]routes verify {source or a.source_label or '.'} --tests auto --patch {out_path.name}[/]")
+
+        if interactive() and sys.stdin.isatty():
+            con.print()
+            con.print("[heading]─── Select Next Action ──────────────────────────────────────────[/]")
+            con.print("  [accent][1][/] [bold]Verify candidate patch in disposable Docker sandbox[/] (routes verify)  [bold cyan][Default][/]")
+            con.print("  [accent][2][/] Export assessment report (HTML)")
+            con.print("  [accent][0][/] Exit to shell")
+            try:
+                choice = typer.prompt("Select option", default="1", show_default=False).strip()
+            except Exception:
+                return
+            if choice in ("1", ""):
+                _run_verify_flow(ctx, a, patch=str(out_path), source=source or a.source_label)
+            elif choice == "2":
+                _run_report_flow(ctx, a)
+        return
+
+    # Single finding loop mode
     if id:
         target = next((f for f in a.findings if id.lstrip("0") == str(f.seq) or id == f"{f.seq:02d}"), None)
         if target is None:
             _fail(f"No finding {id} in assessment {a.id[:8]}.")
-    else:
-        target = a.findings[0]
+    elif target is None:
+        target = next((f for f in a.findings if f.file and f.line), a.findings[0])
 
-    con.print(f"[heading]AI REMEDIATION ENGINE[/]  [muted]Finding #{target.seq:02d} · {escape(target.title)}[/]\n")
-    con.print(f"  Target:     [path]{escape(target.file or '')}:{target.line}[/]")
-    con.print(f"  Rule:       [accent]{escape(target.rule_id)}[/]")
-    con.print(f"  Severity:   {escape(target.severity.upper())}\n")
+    con.print(f"[heading]AI REMEDIATION ENGINE (ITERATIVE LOOP)[/]  [muted]Finding #{target.seq:02d} · {escape(target.title)}[/]\n")
+    con.print(f"  Target:       [path]{escape(target.file or '')}:{target.line}[/]")
+    con.print(f"  Rule:         [accent]{escape(target.rule_id)}[/]")
+    con.print(f"  Severity:     {escape(target.severity.upper())}")
+    con.print(f"  Max Attempts: {rounds}\n")
 
     try:
-        res = run_cli_remediation(target, source_hint=source, console=con)
+        res = remediate_finding_loop(target, source_hint=source, max_rounds=rounds, console=con)
     except Exception as exc:
         _fail(f"Remediation failed: {exc}")
 
-    Path(output).write_text(res.candidate_patch, encoding="utf-8")
+    out_file = Path(output)
+    out_file.write_text(res.final_patch, encoding="utf-8")
 
     if as_json:
         print(json.dumps(res.__dict__, indent=2))
@@ -596,16 +896,36 @@ def remediate(source: Optional[str] = typer.Argument(None, help="GitHub reposito
 
     con.print(f"\n[ok]{g.done}[/] [bold]Model A Root-Cause Analysis:[/]\n  {escape(res.model_a_analysis)}")
     con.print(f"\n[ok]{g.done}[/] [bold]Model A Strategy:[/]\n  {escape(res.model_a_strategy)}")
-    con.print(f"\n[ok]{g.done}[/] [bold]Model B Candidate Patch (unified diff):[/]")
-    con.print(Panel(Syntax(res.candidate_patch, "diff", theme="monokai", line_numbers=True), title=f"Patch for {escape(res.file)}", expand=False))
 
-    if res.validated:
-        con.print(f"[ok]{g.done} Patch validation passed:[/] unified diff applies cleanly without fuzz.")
+    if res.status == "fixed":
+        con.print(f"\n[ok]{g.done}[/] [bold]Verified Candidate Patch (Unified Diff - Attempt {res.rounds_used}/{rounds}):[/]")
+        con.print(Panel(Syntax(res.final_patch, "diff", theme="monokai", line_numbers=True), title=f"Patch for {escape(res.file)}", expand=False))
+        con.print(f"[ok]{g.done} Patch verification passed:[/] verified strictly against codebase.")
     else:
-        con.print(f"[warn]! Patch validation warning:[/] {escape(res.error or 'check diff before applying')}")
+        con.print(f"\n[warn]! Remediation ended with status:[/] [bold]{res.status.upper()}[/]")
+        if res.error:
+            con.print(f"  Reason: {escape(res.error)}")
 
-    con.print(f"\n[ok]Patch written to[/] [path]{Path(output).resolve()}[/]")
+    con.print(f"\n[ok]Patch written to[/] [path]{out_file.resolve()}[/]")
     con.print(f"\n[accent]Next:[/] verify in disposable Docker sandbox:\n  [bold]routes verify {source or a.source_label or '.'} --tests auto --patch {output}[/]")
+
+    if interactive() and sys.stdin.isatty():
+        con.print()
+        con.print("[heading]─── Select Next Action ──────────────────────────────────────────[/]")
+        con.print("  [accent][1][/] [bold]Verify candidate patch in disposable Docker sandbox[/] (routes verify)  [bold cyan][Default][/]")
+        con.print("  [accent][2][/] Remediate all remaining findings (automated batch loop)")
+        con.print("  [accent][3][/] Export assessment report (HTML)")
+        con.print("  [accent][0][/] Exit to shell")
+        try:
+            choice = typer.prompt("Select option", default="1", show_default=False).strip()
+        except Exception:
+            return
+        if choice in ("1", ""):
+            _run_verify_flow(ctx, a, patch=str(out_file), source=source or a.source_label)
+        elif choice == "2":
+            _run_remediate_flow(ctx, a, all_findings=True, source=source or a.source_label)
+        elif choice == "3":
+            _run_report_flow(ctx, a)
 
 
 @app.command()
@@ -776,3 +1096,7 @@ def run() -> None:
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
         sys.exit(130)
+
+
+if __name__ == "__main__":
+    run()

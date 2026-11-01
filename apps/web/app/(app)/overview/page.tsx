@@ -1,6 +1,6 @@
 "use client";
 
-import { FolderKanban, Plus } from "lucide-react";
+import { FolderKanban, Plus, Sparkles, Terminal } from "lucide-react";
 import Link from "next/link";
 
 import { AssessmentsTable } from "@/components/app/assessments-table";
@@ -37,6 +37,7 @@ export default function OverviewPage() {
               <li>Enter the website URL and confirm your authorisation.</li>
               <li>ROUTES discovers its public pages, forms, endpoints and technologies.</li>
               <li>Optionally connect the source code to analyse routes and database queries.</li>
+              <li>Run automated dual-LLM remediation loop in CLI to generate verified patches.</li>
             </ol>
           </EmptyState>
         )}
@@ -52,6 +53,34 @@ export default function OverviewPage() {
                 <div className="mt-1"><SeverityBreakdown counts={data.severity_counts} /></div>
               </div>
             </div>
+
+            {data.open_findings > 0 && (
+              <div className="mb-9 flex flex-col items-start justify-between gap-4 rounded-md border border-accent/40 bg-accent/[0.04] p-5 md:flex-row md:items-center">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-accent/15 px-2.5 py-0.5 text-[11px] font-semibold text-accent">
+                      <Sparkles className="h-3.5 w-3.5" /> AI Remediation Loop Ready
+                    </span>
+                    <span className="text-[12px] text-muted">Dual-LLM (Model A + Model B)</span>
+                  </div>
+                  <h3 className="text-[15px] font-semibold text-ink">
+                    {data.open_findings} open finding{data.open_findings !== 1 ? "s" : ""} detected in your projects
+                  </h3>
+                  <p className="text-[12.5px] text-muted">
+                    Automated 3-round iterative patch generation with strict verification gate and sandbox testing.
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
+                  <div className="flex items-center gap-2 rounded border border-line bg-surface px-3 py-1.5 font-mono text-[12px] text-ink shadow-xs">
+                    <Terminal className="h-3.5 w-3.5 text-accent" />
+                    <span>routes remediate --all</span>
+                  </div>
+                  <Button asChild size="sm">
+                    <Link href="/findings">Review findings</Link>
+                  </Button>
+                </div>
+              </div>
+            )}
 
             <div className="grid gap-x-10 lg:grid-cols-[1.25fr_1fr]">
               <Section title="Recent assessments" actions={<Link href="/assessments" className="text-[12.5px] text-accent hover:underline">All assessments</Link>}>

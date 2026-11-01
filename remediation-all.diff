@@ -1,0 +1,29 @@
+--- a/frontend/src/pages/LoginPage.jsx
++++ b/frontend/src/pages/LoginPage.jsx
+@@ -25,7 +25,13 @@
+   const [showDemoList, setShowDemoList] = useState(false);
+ 
+   const fillAccount = (email) => {
+-    setForm({ email_or_username: email, password: 'Password123!' });
++    const demoPassword = process.env.REACT_APP_DEMO_PASSWORD;
++    if (!demoPassword) {
++      console.warn('REACT_APP_DEMO_PASSWORD environment variable is not set.');
++      toast.error('Demo credentials are not configured.');
++      return;
++    }
++    setForm({ email_or_username: email, password: demoPassword });
+     toast.success(`Selected ${email}`);
+   };
+ 
+
+--- a/frontend/src/pages/security-lab/XSSLabPage.jsx
++++ b/frontend/src/pages/security-lab/XSSLabPage.jsx
+@@ -190,7 +190,7 @@
+                   <div key={i} style={{ padding: 12, background: '#0f172a', borderRadius: 8, border: '1px solid #334155' }}>
+                     <div style={{ fontSize: 13, fontWeight: 600, color: '#f8fafc', marginBottom: 4 }}>{r.reviewer_name}</div>
+                     {renderMode === 'vulnerable' ? (
+-                      <div dangerouslySetInnerHTML={{ __html: r.content }} style={{ fontSize: 13 }} />
++                      <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(r.content) }} style={{ fontSize: 13 }} />
+                     ) : (
+                       <div style={{ fontSize: 13, color: '#94a3b8' }}>{r.content}</div>
+                     )}

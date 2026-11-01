@@ -35,6 +35,7 @@ MENU = [
     ("analyze", "Analyse a repository or folder", "/analyze "),
     ("verify", "Build, run and test an app (sandbox)", "/verify "),
     ("findings", "View latest findings", "/findings"),
+    ("remediate", "Remediate findings with AI loop", "/remediate --all"),
     ("history", "View assessment history", "/history"),
     ("projects", "Projects", "/projects"),
     ("doctor", "Check ROUTES installation", "/doctor"),
@@ -45,6 +46,8 @@ HINTS = {
     "running": "Assessment running · Ctrl+C cancels it (the sandbox is stopped and removed)",
     "verifying": "Build-and-run in progress · Ctrl+C cancels it (all three containers and networks are removed)",
     "verified": "/verify again · /home · Esc back to prompt",
+    "remediate": "Remediation in progress · Model A + Model B iterative correction loop",
+    "remediated": "/verify with --patch to test in sandbox · /home · Esc back to prompt",
     "results": "↑↓ select a finding · Enter shows details · /report html · /history · Esc back to prompt",
     "default": "Type a command · Tab completes · ↑ history · /help · /home",
 }
@@ -297,6 +300,81 @@ class RoutesApp(App):
         req = actions.Request(url=cmd.options.get("--url"), source=cmd.args[0], ref=cmd.options.get("--ref"),
                               private="--private" in cmd.flags, project=cmd.options.get("--project"))
         self.start_assessment(req)
+
+    # ------------------------------------------------------------ remediation
+    def cmd_remediate(self, cmd: Command) -> None:
+        if self.running is not None and not self.running.is_set():
+            self.notify("Something is already running. Wait for it or cancel it (Ctrl+C).", severity="warning")
+            return
+        a = actions.latest(self.ctx)
+        if a is None or not a.findings:
+            self.notify("No findings to remediate. Run /analyze first.", severity="warning")
+            return
+        log = Static(Text.from_markup("[#36c2b4]Initialising AI remediation loop (dual-LLM: Model A + Model B)…[/]"), id="remediate-log")
+        self.set_view("remediate", Static("AI Remediation Engine", classes="section-title"), log)
+        self._remediate_worker(cmd, a, log)
+
+    @work(thread=True, exclusive=True, group="remediation")
+    def _remediate_worker(self, cmd: Command, a, log: Static) -> None:
+        from rich.panel import Panel
+        from rich.syntax import Syntax
+        from rich.table import Table
+        from routes_cli.remediation import remediate_batch_loop, remediate_finding_loop
+
+        target_id = cmd.options.get("--id") or (cmd.args[0] if cmd.args else None)
+        rounds = int(cmd.options.get("--rounds", "3"))
+        output = cmd.options.get("--output", "remediation-all.diff")
+        source_hint = a.source_label
+
+        if target_id:
+            target = next((f for f in a.findings if target_id.lstrip("0") == str(f.seq) or target_id == f"{f.seq:02d}"), None)
+            if not target:
+                self.call_from_thread(self.notify, f"No finding #{target_id} found in latest assessment.", severity="warning")
+                self.call_from_thread(self.show_results, a.id)
+                return
+            self.call_from_thread(log.update, Text.from_markup(f"[#36c2b4]Remediating #{target.seq:02d}: {escape(target.title)}…[/]"))
+            res = remediate_finding_loop(target, source_hint=source_hint, max_rounds=rounds)
+            out_path = Path("remediation-patch.diff" if output == "remediation-all.diff" else output)
+            out_path.write_text(res.final_patch, encoding="utf-8")
+
+            badge = "[#40c057]✓ FIXED[/]" if res.status == "fixed" else "[#fab005]! REVIEW[/]"
+            widgets = [
+                Static(Text.from_markup(f"[b #e6e6e3]AI Remediation[/]  [#5c6068]Finding #{target.seq:02d}[/]"), classes="section-title"),
+                Static(Text.from_markup(f"Status: {badge} · Rounds used: {res.rounds_used}/{rounds}\nCandidate patch: [b]{out_path.name}[/]\n")),
+                Static(Panel(Syntax(res.final_patch, "diff", theme="monokai", line_numbers=True), title=f"Patch for {target.file or 'code'}", expand=False)),
+                Static(Text.from_markup(f"\n[#36c2b4]Next:[/] run [b]/verify {escape(source_hint or '.')} --tests auto --patch {out_path.name}[/] to test in sandbox.")),
+            ]
+            self.call_from_thread(self.set_view, "remediated", *widgets, hint=f"/verify {source_hint or '.'} --tests auto --patch {out_path.name} · /home")
+            self.call_from_thread(self.notify, f"Finding #{target.seq:02d} remediation: {res.status.upper()}")
+        else:
+            targets = [f for f in a.findings if f.file and f.line]
+            if not targets:
+                self.call_from_thread(self.notify, "No actionable code findings in latest assessment.", severity="warning")
+                self.call_from_thread(self.show_results, a.id)
+                return
+            self.call_from_thread(log.update, Text.from_markup(f"[#36c2b4]Running batch AI remediation across {len(targets)} findings…[/]"))
+            report = remediate_batch_loop(targets, source_hint=source_hint, max_rounds=rounds)
+            out_path = Path(output)
+            out_path.write_text(report.combined_patch, encoding="utf-8")
+
+            tbl = Table(title="AI Remediation Batch Summary", box=None, header_style="bold cyan")
+            tbl.add_column("ID", style="bold")
+            tbl.add_column("Vulnerability")
+            tbl.add_column("Location")
+            tbl.add_column("Verdict", style="bold")
+            tbl.add_column("Attempts")
+            for r in report.results:
+                v_text = f"[#40c057]✓ FIXED[/]" if r.status == "fixed" else f"[#fab005]! REVIEW[/]"
+                tbl.add_row(r.finding_id, r.title, f"{r.file}:{r.line}", v_text, f"{r.rounds_used}/{rounds}")
+
+            widgets = [
+                Static(Text.from_markup(f"[b #e6e6e3]AI Remediation Complete[/]  [#5c6068]{report.fixed_count}/{report.total_findings} fixed[/]"), classes="section-title"),
+                Static(tbl),
+                Static(Text.from_markup(f"\n[b]Cumulative patch written to:[/] [path]{out_path.resolve()}[/]\n\n"
+                                        f"[#36c2b4]Next:[/] run [b]/verify {escape(source_hint or '.')} --tests auto --patch {out_path.name}[/] to test in disposable Docker sandbox.")),
+            ]
+            self.call_from_thread(self.set_view, "remediated", *widgets, hint=f"/verify {source_hint or '.'} --tests auto --patch {out_path.name} · /home")
+            self.call_from_thread(self.notify, f"Batch remediation complete: {report.fixed_count}/{report.total_findings} fixed.")
 
     # ------------------------------------------------------------ build & run
     def cmd_verify(self, cmd: Command) -> None:
