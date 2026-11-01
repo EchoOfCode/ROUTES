@@ -13,6 +13,9 @@ from worker.sandbox.runner import SandboxRunRequest, SandboxRunner, SandboxRunRe
 
 
 class FakeSandboxRunner(SandboxRunner):
+    kind = "fake"
+    evidence_grade = "simulated"
+
     def __init__(self, result: SandboxRunResult | list[SandboxRunResult]) -> None:
         self._scripted = list(result) if isinstance(result, list) else None
         self._single = None if isinstance(result, list) else result

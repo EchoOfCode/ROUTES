@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 from app.core.db import get_sessionmaker
+from app.services import artifacts, remediation_store
 from app.services.lifecycle import reconcile_after_restart
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -17,6 +18,12 @@ def main() -> int:
     with get_sessionmaker()() as db:
         n = reconcile_after_restart(db)
     log.info("startup reconciliation complete; %d interrupted assessment(s) marked failed", n)
+    with get_sessionmaker()() as db:
+        # Remediation runs survive restarts: interrupted ones are re-dispatched
+        # through the outbox (published by worker-remediate when it starts).
+        recovered = remediation_store.recover_interrupted(db)
+        purged = artifacts.purge_expired(db)
+    log.info("remediation recovery: %d run(s) re-dispatched, %d expired artifact(s) purged", recovered, purged)
     return 0
 
 

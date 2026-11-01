@@ -21,6 +21,9 @@ RUN_KIND = "remediate_verify"  # not yet recognised by sandbox_manager; see modu
 
 
 class RealSandboxRunner(SandboxRunner):
+    kind = "real"
+    evidence_grade = "sandbox"
+
     def __init__(self, *, manager_url: str, manager_token: str, timeout: float = 20.0,
                  transport: httpx.BaseTransport | None = None) -> None:
         self._client = httpx.Client(

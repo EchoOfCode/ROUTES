@@ -76,6 +76,12 @@ class SandboxRunResult:
 
 
 class SandboxRunner(ABC):
+    # What a result from this runner proves. Only a runner that really
+    # executes code in an isolated sandbox may report "sandbox"; anything
+    # canned or scripted is "simulated" and can never verify a fix.
+    kind: str = "unknown"
+    evidence_grade: str = "simulated"
+
     @abstractmethod
     def run(self, request: SandboxRunRequest) -> SandboxRunResult:
         """Execute `request.testbench` against `request.files` and report

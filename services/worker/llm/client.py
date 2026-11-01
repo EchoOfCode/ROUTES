@@ -38,6 +38,9 @@ class LLMClient:
         self.model = model
         self.cache_mode = cache_mode
         self.cache_dir = Path(cache_dir) if cache_dir else None
+        # Usage reported by the provider for the most recent live call
+        # (token counts, served model); None for cached replies.
+        self.last_usage: dict | None = None
         self._client = httpx.Client(
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             timeout=httpx.Timeout(timeout, connect=10.0),
@@ -47,7 +50,14 @@ class LLMClient:
     def close(self) -> None:
         self._client.close()
 
+    @property
+    def provider(self) -> str:
+        """The provider is identified by the endpoint's host, so a new
+        provider never needs a code or schema change."""
+        return httpx.URL(self.endpoint).host or "unknown"
+
     def complete(self, messages: list[dict], *, temperature: float = 0.0) -> str:
+        self.last_usage = None
         key = self._cache_key(messages, temperature)
         if self.cache_mode == "replay":
             cached = self._read_cache(key)
@@ -68,9 +78,16 @@ class LLMClient:
         if r.status_code != 200:
             raise LLMError(f"LLM request returned {r.status_code}: {r.text[:300]}")
         try:
-            return r.json()["choices"][0]["message"]["content"]
+            body = r.json()
+            content = body["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise LLMError(f"LLM response had an unexpected shape: {exc}") from exc
+        usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+        self.last_usage = {k: usage[k] for k in ("prompt_tokens", "completion_tokens", "total_tokens")
+                           if isinstance(usage.get(k), int)}
+        if isinstance(body.get("model"), str):
+            self.last_usage["model_version"] = body["model"]
+        return content
 
     def _cache_key(self, messages: list[dict], temperature: float) -> str:
         payload = json.dumps({"endpoint": self.endpoint, "model": self.model, "messages": messages,

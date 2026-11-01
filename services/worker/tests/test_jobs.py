@@ -5,7 +5,7 @@ import uuid
 import pytest
 from sqlalchemy import select, text
 
-from app.core.db import get_engine
+from app.core.db import get_engine, get_sessionmaker
 from app.models import (
     Assessment,
     AssessmentJob,

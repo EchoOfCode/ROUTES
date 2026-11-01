@@ -213,10 +213,22 @@ export type RemediationIteration = {
   failure_output: string | null; created_at: string;
 };
 
+export type RemediationVerdict =
+  | "verified_fixed" | "partially_remediated" | "human_review" | "inconclusive" | "failed" | "cancelled";
+
+export type RemediationFinding = {
+  finding_id: string; is_primary: boolean; resolution: string; resolution_reason: string | null;
+  gates: Record<string, boolean>; residual_risk: string | null;
+};
+
 export type Remediation = {
   id: string; finding_id: string; status: RemediationStatus; finding_status: string; cancel_requested: boolean;
   error: string | null; started_at: string | null; finished_at: string | null; created_at: string;
   iterations: RemediationIteration[];
+  // Recorded since migration 0008: workflow stage and the evidence-based verdict.
+  project_id: string; assessment_id: string; stage: string; verdict: RemediationVerdict | null;
+  verdict_reason: string | null; failure_category: string | null; attempts_total: number; max_attempts: number;
+  version: number; findings: RemediationFinding[];
 };
 
 export type Overview = {

@@ -422,3 +422,51 @@ rules:
       routes_severity: medium
       routes_confidence: low
       cwe: CWE-79
+
+  # ---------------------------------------------------------------- SQL Injection
+  - id: routes.sqli.raw-query-interpolation
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Database query constructed with unescaped string interpolation or concatenation.
+    patterns:
+      - pattern-either:
+          - pattern: $DB.query(`...${$X}...`, ...)
+          - pattern: $DB.query("..." + $X, ...)
+          - pattern: $DB.query('...' + $X, ...)
+          - pattern: dbQuery(`...${$X}...`, ...)
+          - pattern: dbQuery("..." + $X, ...)
+          - pattern: dbQuery('...' + $X, ...)
+          - pattern: |
+              $SQL = `...${$X}...`;
+              ...
+              $DB.query($SQL, ...)
+          - pattern: |
+              $SQL = "..." + $X + "...";
+              ...
+              $DB.query($SQL, ...)
+          - pattern: |
+              $SQL = '...' + $X + '...';
+              ...
+              $DB.query($SQL, ...)
+          - pattern: |
+              $SQL = `...${$X}...`;
+              ...
+              dbQuery($SQL, ...)
+          - pattern: |
+              $SQL = "..." + $X + "...";
+              ...
+              dbQuery($SQL, ...)
+          - pattern: |
+              $SQL = '...' + $X + '...';
+              ...
+              dbQuery($SQL, ...)
+    metadata:
+      routes_type: SQL Injection
+      routes_title: User input used to build a SQL query
+      routes_plain: >-
+        A database query is constructed using dynamic string interpolation or concatenation instead of parameterized values.
+        An attacker can manipulate the input to alter the structure of the SQL command, potentially accessing, modifying, or deleting sensitive data.
+      routes_recommendation: Use parameterized queries (prepared statements) with placeholders ($1, $2 or ?) rather than string formatting.
+      routes_severity: critical
+      routes_confidence: high
+      cwe: CWE-89

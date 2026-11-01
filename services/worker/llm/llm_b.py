@@ -20,6 +20,10 @@ from worker.llm.client import LLMClient
 from worker.llm.llm_a import LlmAResult
 from worker.llm.validation import validate_fix
 
+# Recorded with every invocation. Bump it whenever SYSTEM_PROMPT or the user
+# prompt layout below changes.
+PROMPT_TEMPLATE_VERSION = "llm_b/2026.11.1"
+
 SYSTEM_PROMPT = (
     "You are a software engineer fixing a security issue. You will be given "
     "instructions and a redacted code snapshot - secrets are placeholders like "

@@ -23,6 +23,10 @@ from routes_shared.remediation import Snapshot
 from worker.llm.client import LLMClient, LLMError
 from worker.llm.payloads import payloads_for
 
+# Recorded with every invocation. Bump it whenever SYSTEM_PROMPT or the user
+# prompt layout below changes.
+PROMPT_TEMPLATE_VERSION = "llm_a/2026.11.1"
+
 SYSTEM_PROMPT = (
     "You are a security engineer preparing a fix request for another engineer. "
     "You will be given a security finding and a redacted code snapshot - secrets "

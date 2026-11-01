@@ -1358,3 +1358,17 @@ A01 findings: 14   (total findings: 28)
   owner-column -> `needs_human_review` branch. Also still open from S10a:
   the spec's known-bad -> known-good fix table, which is the other
   remediation-side item.
+
+## S11 — persistent remediation lifecycle (migration 0008)
+
+The whole remediation lifecycle is now recorded in PostgreSQL and a private
+artifact store, as it happens, and the verdict is computed from those records.
+Recorded: runs linked to project, assessment, actor and findings; context and
+redaction; every model call; versioned plans and testbenches; baseline and
+gate runs; patch attempts (at most 3 per batch, enforced by the database);
+every sandbox execution and test result; independent reanalysis; an
+append-only audit trail; and a transactional outbox. Simulated sandbox
+evidence can never produce `verified_fixed`.
+
+Design, ERD, constraints, workflow-to-table mapping, security, migration and
+test results: [REMEDIATION_DATA_MODEL.md](REMEDIATION_DATA_MODEL.md).

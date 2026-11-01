@@ -83,6 +83,12 @@ export function RemediationPanel({ assessmentId, finding }: { assessmentId: stri
         </div>
       </div>
 
+      <p className="mt-2 text-[12.5px] text-muted">
+        {remediation.verdict
+          ? <>Verdict: <span className="font-medium text-ink">{VERDICT_LABELS[remediation.verdict]}</span></>
+          : <>Stage: <span className="font-medium text-ink">{remediation.stage.replaceAll("_", " ")}</span></>}
+        {" · "}attempts {remediation.attempts_total} of {remediation.max_attempts}
+      </p>
       {remediation.error && (
         <p className="mt-2 text-[12.5px] text-ink-2">{remediation.error}</p>
       )}
@@ -99,6 +105,15 @@ export function RemediationPanel({ assessmentId, finding }: { assessmentId: stri
     </div>
   );
 }
+
+const VERDICT_LABELS: Record<NonNullable<Remediation["verdict"]>, string> = {
+  verified_fixed: "verified fixed",
+  partially_remediated: "partially remediated",
+  human_review: "needs human review",
+  inconclusive: "inconclusive (not verified)",
+  failed: "failed",
+  cancelled: "cancelled",
+};
 
 function IterationRow({ iteration }: { iteration: RemediationIteration }) {
   const fixed = Boolean(iteration.rescan_diff?.fingerprint_gone) && !(iteration.rescan_diff?.new_fingerprints?.length);

@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-from routes_shared.redaction import redact_structure
+from routes_shared.redaction import redact_structure, redact_text
 
 from source_analyzer.acquisition.archive import ArchiveError, extract_tar_gz, extract_zip
 from source_analyzer.acquisition.github import ImportFailed, download
@@ -60,6 +60,12 @@ def acquire(kind: str, work: Path) -> tuple[Path, list[str]]:
     return src, notes
 
 
+# Rules whose finding *is* a committed secret value: the fix is rotating the
+# secret, and a code snapshot of the finding would contain the secret itself.
+SECRET_VALUE_RULES = frozenset({"routes.crypto.weak-jwt-secret", "routes.crypto.hardcoded-auth-secret",
+                                "routes.config.public-env-secret"})
+
+
 def analyse(root: Path, kind: str, target_host: str) -> dict:
     emit("profiling", "Profiling repository")
     profile = build_profile(root)
@@ -104,13 +110,19 @@ def analyse(root: Path, kind: str, target_host: str) -> dict:
         ctx = AnalysisContext(files=sources, tsconfig_paths=profile.tsconfig_paths,
                               tsconfig_base=profile.tsconfig_base, pg_declared="pg" in profile.dep_names())
         snapshot_failures = 0
+
+        def snapshot_dict(snapshot) -> dict:
+            # A snapshot is copied verbatim from the repository, so mask any
+            # secret in it here, not only in main()'s final pass: no code
+            # path may ever carry a raw secret value out of this function.
+            return {"file": snapshot.file, "start_line": snapshot.start_line, "end_line": snapshot.end_line,
+                    "code": redact_text(snapshot.code, max_length=1_000_000)}
+
         for vuln_class in VULN_CLASSES:
             plugin_findings = vuln_class.detect(ctx)
             for f in plugin_findings:
                 try:
-                    snapshot = vuln_class.build_snapshot(f, ctx)
-                    f["snapshot"] = {"file": snapshot.file, "start_line": snapshot.start_line,
-                                     "end_line": snapshot.end_line, "code": snapshot.code}
+                    f["snapshot"] = snapshot_dict(vuln_class.build_snapshot(f, ctx))
                 except Exception:  # noqa: BLE001
                     # The finding itself is still valid and reported; only
                     # the remediation-loop snapshot is unavailable for it.
@@ -124,10 +136,13 @@ def analyse(root: Path, kind: str, target_host: str) -> dict:
         for f in findings:
             if "snapshot" in f or not f.get("file") or not f.get("line"):
                 continue
+            if f.get("rule_id", "").startswith("routes.secrets.") or f.get("rule_id") in SECRET_VALUE_RULES:
+                # The fix for a committed secret is rotating it, not a code
+                # rewrite, and its snapshot would be the secret itself.
+                f["snapshot"] = None
+                continue
             try:
-                snapshot = snapshot_for(f, ctx)
-                f["snapshot"] = {"file": snapshot.file, "start_line": snapshot.start_line,
-                                 "end_line": snapshot.end_line, "code": snapshot.code}
+                f["snapshot"] = snapshot_dict(snapshot_for(f, ctx))
             except Exception:  # noqa: BLE001
                 f["snapshot"] = None
 

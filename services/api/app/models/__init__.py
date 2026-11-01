@@ -1,7 +1,26 @@
 from app.models.assessment import Assessment, AssessmentJob
 from app.models.base import Base
 from app.models.project import Project, ProjectIntegration
-from app.models.remediation import Remediation, RemediationIteration
+from app.models.remediation import (
+    AiModelInvocation,
+    Remediation,
+    RemediationArtifact,
+    RemediationAuditEvent,
+    RemediationBatchFile,
+    RemediationContext,
+    RemediationFinding,
+    RemediationIteration,
+    RemediationOutbox,
+    RemediationPatchAttempt,
+    RemediationPatchBatch,
+    RemediationPlan,
+    RemediationReanalysisFinding,
+    RemediationReanalysisRun,
+    RemediationTestCase,
+    RemediationTestResult,
+    RemediationTestSuite,
+    RemediationVerificationRun,
+)
 from app.models.results import (
     DetectedTechnology,
     DiscoveredEndpoint,
@@ -12,6 +31,7 @@ from app.models.results import (
 from app.models.user import User, UserSession
 
 __all__ = [
+    "AiModelInvocation",
     "Assessment",
     "AssessmentJob",
     "Base",
@@ -21,7 +41,22 @@ __all__ = [
     "Project",
     "ProjectIntegration",
     "Remediation",
+    "RemediationArtifact",
+    "RemediationAuditEvent",
+    "RemediationBatchFile",
+    "RemediationContext",
+    "RemediationFinding",
     "RemediationIteration",
+    "RemediationOutbox",
+    "RemediationPatchAttempt",
+    "RemediationPatchBatch",
+    "RemediationPlan",
+    "RemediationReanalysisFinding",
+    "RemediationReanalysisRun",
+    "RemediationTestCase",
+    "RemediationTestResult",
+    "RemediationTestSuite",
+    "RemediationVerificationRun",
     "SecurityFinding",
     "SourceAnalysisResult",
     "User",

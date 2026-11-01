@@ -52,9 +52,24 @@ class Settings(BaseSettings):
 
     batch_size: int = Field(default=8, alias="BATCH_SIZE")
     llm_concurrency: int = Field(default=4, alias="LLM_CONCURRENCY")
-    max_rounds: int = Field(default=5, alias="MAX_ROUNDS")
+    # Patch attempts per batch: 1 initial patch + 2 corrections. The database
+    # refuses more than the run's recorded limit (and never more than 10).
+    max_rounds: int = Field(default=3, ge=1, le=10, alias="MAX_ROUNDS")
     stagnation_rounds: int = Field(default=2, alias="STAGNATION_ROUNDS")
     remediation_token_budget: int = Field(default=8000, alias="REMEDIATION_TOKEN_BUDGET")
+
+    # Private artifact store for remediation records too large or too
+    # sensitive for database rows (redacted context, model input/output,
+    # patches, testbenches, sandbox logs). Shared by api and worker-remediate.
+    artifacts_dir: str = Field(default="/data/artifacts", alias="ARTIFACTS_DIR")
+    remediation_artifact_retention_days: int = Field(default=30, ge=1, alias="REMEDIATION_ARTIFACT_RETENTION_DAYS")
+    # Model prompts/responses are kept only when this is on (default): they
+    # are needed to reproduce and audit a run, and contain redacted code only.
+    remediation_retain_model_io: bool = Field(default=True, alias="REMEDIATION_RETAIN_MODEL_IO")
+    # A worker holds a lease on the run it advances; a run whose lease
+    # expired (crashed worker) is resumed at most this many times.
+    remediation_lease_seconds: int = Field(default=900, ge=60, alias="REMEDIATION_LEASE_SECONDS")
+    remediation_max_recoveries: int = Field(default=2, ge=0, alias="REMEDIATION_MAX_RECOVERIES")
 
     @property
     def origins(self) -> list[str]:

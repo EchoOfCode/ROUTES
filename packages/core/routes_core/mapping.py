@@ -6,7 +6,6 @@ these records, so redaction and shaping happen in one place.
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, field
 
 from routes_shared.contracts import DiscoveryResult, SourceResult
@@ -143,4 +142,10 @@ def _fingerprint(f: dict) -> str:
 
 
 def fingerprint(f: dict) -> str:
-    return _fingerprint(f)
+    """Safety net: the analyzer always sets a content-based fingerprint itself
+    (routes_shared.fingerprint: rule, file and normalised snippet, never the
+    line number), so this should not normally run."""
+    from routes_shared.fingerprint import fingerprint as content_fingerprint
+
+    snippet = (f.get("technical_details") or {}).get("snippet") or f.get("evidence_summary") or ""
+    return content_fingerprint(f["rule_id"], f["file"], snippet)

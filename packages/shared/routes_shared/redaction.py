@@ -38,6 +38,12 @@ _ASSIGNMENT_RE = re.compile(
 
 REDACTED = "[redacted]"
 
+# Recorded with every remediation context so a later reader knows exactly
+# which rules sanitised what an external model received. Bump it whenever
+# _SECRET_PATTERNS, _ASSIGNMENT_RE or the entropy rule change.
+REDACTION_ENGINE = "routes_shared.redaction.redact_for_llm"
+REDACTION_RULESET_VERSION = "2026.11.1"
+
 
 def mask_value(value: str) -> str:
     """Return a hint that never reveals more than 4 characters of a secret."""
@@ -171,3 +177,24 @@ def restore(text: str, placeholder_map: dict[str, str]) -> str:
     for placeholder, value in placeholder_map.items():
         out = out.replace(placeholder, value)
     return out
+
+
+_PLACEHOLDER_VALUE_RE = re.compile(r"^<SECRET_\d+>$")
+
+
+def unredacted_secret_count(text: str | None) -> int:
+    """Independent check run on text *after* redaction, before it may leave
+    ROUTES: how many secret-like values are still present. Placeholders
+    (<SECRET_n>) and already-masked values (…[redacted]) do not count. A
+    non-zero result means the text must not be sent to an external model."""
+    if not text:
+        return 0
+    count = 0
+    for m in _ASSIGNMENT_RE.finditer(text):
+        value = m.group("value")
+        if _PLACEHOLDER_VALUE_RE.match(value) or value.endswith(REDACTED):
+            continue
+        count += 1
+    for pattern in _SECRET_PATTERNS:
+        count += sum(1 for m in pattern.finditer(text) if not m.group(0).endswith(REDACTED))
+    return count

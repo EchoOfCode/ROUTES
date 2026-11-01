@@ -7,6 +7,7 @@ from pathlib import Path
 _base = os.environ["DATABASE_URL"].rsplit("/", 1)[0]
 os.environ["DATABASE_URL"] = f"{_base}/routes_test"
 os.environ.setdefault("UPLOADS_DIR", "/tmp/routes-test-uploads")
+os.environ.setdefault("ARTIFACTS_DIR", "/tmp/routes-test-artifacts")
 os.environ["ALLOWED_ORIGINS"] = "http://localhost:3000"
 
 import fakeredis  # noqa: E402

@@ -9,7 +9,7 @@ COPY packages/shared /build/shared
 COPY packages/core /build/core
 COPY services/api /srv/api
 RUN pip install --no-cache-dir /build/shared /build/core "/srv/api[test]" && rm -rf /build /srv/api/build \
-    && mkdir -p /data/uploads && chown -R 10001:10001 /data
+    && mkdir -p /data/uploads /data/artifacts && chmod 700 /data/artifacts && chown -R 10001:10001 /data
 
 WORKDIR /srv/api
 USER 10001:10001

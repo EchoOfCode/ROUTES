@@ -41,13 +41,38 @@ from routes_shared.fingerprint import normalize_snippet
 from routes_shared.remediation import FixConstraints, Snapshot, Testbench
 
 from worker.fix_table import lookup_fix
-from worker.gate import run_gate
+from worker.gate import GateResult, run_gate
 from worker.llm.client import LLMClient
 from worker.llm.llm_a import LlmAResult, call_llm_a
 from worker.llm.llm_b import call_llm_b
-from worker.sandbox.runner import SandboxFile, SandboxRunner, SandboxRunRequest, SourceRef
+from worker.sandbox.runner import SandboxFile, SandboxRunner, SandboxRunRequest, SandboxRunResult, SourceRef
 
 MAX_TESTBENCH_ATTEMPTS = 3  # 1 initial + 2 regenerations, per "regenerate (max 2)"
+
+
+class LoopObserver:
+    """Hooks the job uses to persist every step as it happens. The loop
+    itself stays free of database code; every hook is a no-op here. A hook
+    may raise to stop the loop (for example when the worker lost its lease)."""
+
+    def stage(self, stage: str) -> None: ...
+
+    def testbench_generated(self, attempt: int, llm_a_result: LlmAResult, testbench: Testbench) -> None: ...
+
+    def gate_finished(self, attempt: int, testbench: Testbench, gate_result: GateResult) -> None: ...
+
+    def round_started(self, round_no: int) -> None: ...
+
+    def candidate_ready(self, round_no: int, record: RoundRecord, errors: list[str]) -> list[str] | None:
+        """Return extra validation problems (e.g. the candidate is not a valid
+        patch within the batch's file scope): the candidate is then rejected
+        before it reaches a sandbox."""
+
+    def verified(self, round_no: int, request: SandboxRunRequest, result: SandboxRunResult) -> None: ...
+
+    def rescanned(self, round_no: int, request: SandboxRunRequest, result: SandboxRunResult) -> None: ...
+
+    def round_finished(self, record: RoundRecord, passed: bool) -> None: ...
 
 
 @dataclass
@@ -80,15 +105,28 @@ def _candidate_hash(code: str) -> str:
     return hashlib.sha256(normalize_snippet(code).encode()).hexdigest()[:32]
 
 
+class _Cancelled(Exception):
+    pass
+
+
 def _establish_testbench(llm_a_client: LLMClient, sandbox_runner: SandboxRunner, finding: dict,
-                         snapshot: Snapshot) -> tuple[LlmAResult, Testbench] | None:
+                         snapshot: Snapshot, observer: LoopObserver | None = None,
+                         should_cancel: Callable[[], bool] | None = None) -> tuple[LlmAResult, Testbench] | None:
     """Calls LLM A and gates the testbench (S7), regenerating on gate
     failure up to MAX_TESTBENCH_ATTEMPTS total tries. Returns
     (LlmAResult, Testbench) once gated, or None if it never passes."""
-    for _ in range(MAX_TESTBENCH_ATTEMPTS):
+    observer = observer or LoopObserver()
+    for attempt in range(1, MAX_TESTBENCH_ATTEMPTS + 1):
+        if should_cancel is not None and should_cancel():
+            raise _Cancelled
+        observer.stage("analysis")
         llm_a_result = call_llm_a(llm_a_client, finding, snapshot)
         testbench = Testbench(path=_testbench_path(snapshot.file), content=llm_a_result.testbench)
+        observer.testbench_generated(attempt, llm_a_result, testbench)
+        observer.stage("baseline_verification")
         gate_result = run_gate(sandbox_runner, finding, snapshot, testbench)
+        observer.stage("validating_tests")
+        observer.gate_finished(attempt, testbench, gate_result)
         if gate_result.passed:
             return llm_a_result, testbench
     return None
@@ -96,9 +134,16 @@ def _establish_testbench(llm_a_client: LLMClient, sandbox_runner: SandboxRunner,
 
 def run_remediation_loop(*, finding: dict, snapshot: Snapshot, llm_a_client: LLMClient, llm_b_client: LLMClient,
                          sandbox_runner: SandboxRunner, source_ref: SourceRef, baseline_fingerprints: set[str],
-                         max_rounds: int = 5, stagnation_rounds: int = 2,
-                         should_cancel: Callable[[], bool] | None = None) -> LoopOutcome:
-    established = _establish_testbench(llm_a_client, sandbox_runner, finding, snapshot)
+                         max_rounds: int = 3, stagnation_rounds: int = 2,
+                         should_cancel: Callable[[], bool] | None = None,
+                         observer: LoopObserver | None = None, first_round: int = 1) -> LoopOutcome:
+    """`first_round` > 1 resumes a batch whose earlier attempts were already
+    used; they still count against `max_rounds`."""
+    observer = observer or LoopObserver()
+    try:
+        established = _establish_testbench(llm_a_client, sandbox_runner, finding, snapshot, observer, should_cancel)
+    except _Cancelled:
+        return LoopOutcome(status="cancelled", reason="cancelled by request")
     if established is None:
         return LoopOutcome(status="needs_human_review",
                            reason="the testbench did not pass the gate after 2 regeneration attempts")
@@ -112,10 +157,14 @@ def run_remediation_loop(*, finding: dict, snapshot: Snapshot, llm_a_client: LLM
     previous_failure: str | None = None
     recent_hashes: list[str] = []
 
-    for round_no in range(1, max_rounds + 1):
+    for round_no in range(first_round, max_rounds + 1):
         if should_cancel is not None and should_cancel():
             return LoopOutcome(status="cancelled", reason="cancelled by request", rounds=rounds)
 
+        if round_no > first_round:
+            observer.stage("retrying")
+        observer.stage("generating_patch")
+        observer.round_started(round_no)
         record = RoundRecord(round_no=round_no)
 
         # "Prefer a lookup table of known-bad -> known-good fixes and call
@@ -134,6 +183,11 @@ def run_remediation_loop(*, finding: dict, snapshot: Snapshot, llm_a_client: LLM
                                       previous_failure=previous_failure)
             if not llm_b_result.valid:
                 record.failure_output = "; ".join(llm_b_result.errors)
+                record.fix_source = "llm_b"
+                observer.stage("validating_patch")
+                observer.candidate_ready(round_no, record, list(llm_b_result.errors))
+                observer.stage("analysing_failure")
+                observer.round_finished(record, False)
                 rounds.append(record)
                 previous_failure = record.failure_output
                 recent_hashes = []  # an invalid response is not a repeatable candidate
@@ -145,17 +199,33 @@ def run_remediation_loop(*, finding: dict, snapshot: Snapshot, llm_a_client: LLM
         record.candidate_hash = candidate_hash
         record.candidate_code = candidate_code
         recent_hashes.append(candidate_hash)
-        if len(recent_hashes) >= stagnation_rounds and len(set(recent_hashes[-stagnation_rounds:])) == 1:
+        observer.stage("validating_patch")
+        oscillating = len(recent_hashes) >= stagnation_rounds and len(set(recent_hashes[-stagnation_rounds:])) == 1
+        problems = observer.candidate_ready(round_no, record,
+                                            ["oscillation: identical candidate repeated"] if oscillating else [])
+        if problems and not oscillating:
+            record.failure_output = "the candidate was rejected as a patch: " + "; ".join(problems)
+            previous_failure = record.failure_output
+            observer.stage("analysing_failure")
+            observer.round_finished(record, False)
+            rounds.append(record)
+            continue
+        if oscillating:
             record.failure_output = "oscillation: identical candidate repeated"
+            observer.stage("analysing_failure")
+            observer.round_finished(record, False)
             rounds.append(record)
             return LoopOutcome(status="needs_human_review",
                                reason="oscillation: the same candidate was produced again", rounds=rounds)
 
-        verify_result = sandbox_runner.run(SandboxRunRequest(
+        observer.stage("testing")
+        verify_request = SandboxRunRequest(
             run_id=str(uuid.uuid4()), finding_id=finding_id, round_no=round_no,
             files=[SandboxFile(path=snapshot.file, content=candidate_code)],
             testbench=SandboxFile(path=testbench.path, content=testbench.content),
-        ))
+        )
+        verify_result = sandbox_runner.run(verify_request)
+        observer.verified(round_no, verify_request, verify_result)
         record.test_results = {
             "status": verify_result.status,
             "tests": [{"name": t.name, "category": t.category, "passed": t.passed, "message": t.message}
@@ -166,16 +236,21 @@ def run_remediation_loop(*, finding: dict, snapshot: Snapshot, llm_a_client: LLM
         if not verify_ok:
             reason = verify_result.error_reason or "exploit and/or benign assertions did not pass"
             record.failure_output = reason
+            observer.stage("analysing_failure")
+            observer.round_finished(record, False)
             rounds.append(record)
             previous_failure = reason
             continue
 
-        rescan_result = sandbox_runner.run(SandboxRunRequest(
+        observer.stage("post_remediation_analysis")
+        rescan_request = SandboxRunRequest(
             run_id=str(uuid.uuid4()), finding_id=finding_id, round_no=round_no,
             files=[SandboxFile(path=snapshot.file, content=candidate_code)],
             testbench=SandboxFile(path=testbench.path, content=testbench.content),
             source_ref=source_ref,
-        ))
+        )
+        rescan_result = sandbox_runner.run(rescan_request)
+        observer.rescanned(round_no, rescan_request, rescan_result)
         rescan_fps = set(rescan_result.rescan_fingerprints or [])
         fingerprint_gone = original_fingerprint not in rescan_fps
         known = baseline_fingerprints | ({original_fingerprint} if original_fingerprint else set())
@@ -184,6 +259,7 @@ def run_remediation_loop(*, finding: dict, snapshot: Snapshot, llm_a_client: LLM
         rounds.append(record)
 
         if fingerprint_gone and not new_fingerprints:
+            observer.round_finished(record, True)
             return LoopOutcome(status="fixed", rounds=rounds)
 
         reason_bits = []
@@ -192,6 +268,9 @@ def run_remediation_loop(*, finding: dict, snapshot: Snapshot, llm_a_client: LLM
         if new_fingerprints:
             reason_bits.append(f"new finding(s) appeared: {new_fingerprints}")
         previous_failure = "; ".join(reason_bits)
+        record.failure_output = previous_failure
+        observer.stage("analysing_failure")
+        observer.round_finished(record, False)
 
     return LoopOutcome(status="needs_human_review", reason=f"did not succeed within {max_rounds} rounds",
                        rounds=rounds)
