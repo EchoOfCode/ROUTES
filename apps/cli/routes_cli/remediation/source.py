@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 import httpx
-
 from routes_core.sources import SourceError, SourceSpec, classify, pack_directory
 from routes_shared.remediation import Snapshot
 
@@ -85,7 +84,7 @@ class RemediationSource:
             return r.text
         raise RemediationSourceError("Unsupported source.")
 
-    def region(self, finding) -> Region:  # noqa: ANN001 - a routes_storage Finding
+    def region(self, finding) -> Region:
         if not finding.file:
             raise RemediationSourceError("The finding does not point at a file.")
         content = self.read(finding.file)
@@ -136,7 +135,7 @@ def _safe_rel(rel: str) -> str:
     return str(p)
 
 
-def resolve(assessment, *, override: str | None, cache_dir: Path) -> RemediationSource:  # noqa: ANN001
+def resolve(assessment, *, override: str | None, cache_dir: Path) -> RemediationSource:
     """The source of `assessment` (or `override`), pinned to the analysed commit."""
     project = assessment.project
     commit = (assessment.summary or {}).get("source_commit")

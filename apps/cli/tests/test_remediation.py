@@ -12,9 +12,9 @@ import json
 
 import httpx
 import pytest
+from routes_cli.remediation import llm as llm_mod
 
 import tests.conftest as cf
-from routes_cli.remediation import llm as llm_mod
 from tests.test_commands import invoke
 
 HEADER = 'import { pool } from "@/lib/db";\n\n'
@@ -255,7 +255,7 @@ def test_oscillation_stops_the_loop_for_human_review(remediation):
 
 def test_invalid_candidate_never_reaches_the_sandbox(remediation):
     s = remediation(Script(candidates=[WITH_IMPORT]))
-    r, run = _run(s.seq("routes.sqli.pg-tainted-query"), "--attempts", "1")
+    _r, run = _run(s.seq("routes.sqli.pg-tainted-query"), "--attempts", "1")
     f = run["findings"][0]
     assert f["attempts"][0]["outcome"] == "rejected" and "new imports" in f["attempts"][0]["failure"]
     assert f["resolution"] == "human_review"
@@ -273,8 +273,8 @@ def test_unbuildable_app_falls_back_to_rescan_and_is_only_inconclusive(remediati
 
 def test_engine_unavailable_stops_before_any_model_call(remediation, monkeypatch):
     s = remediation(Script(candidates=[]))
-    from routes_core.engine import EngineUnavailable
     from routes_cli.context import Context
+    from routes_core.engine import EngineUnavailable
 
     class Down(RemediationEngine):
         def health(self):
@@ -294,6 +294,7 @@ def test_non_interactive_needs_ids_and_confirmation(remediation):
 
 async def test_tui_remediate_confirms_shows_the_pipeline_and_the_verdict(remediation):
     from routes_cli.tui.modals import ConfirmModal
+
     from tests.test_tui import make_app, type_text, wait_for
 
     s = remediation(Script(candidates=[WRONG, FIXED], sandbox=["fail", "pass"], rescans=["fixed"]))
@@ -320,7 +321,7 @@ def _security_tests(s: Script) -> list[dict]:
 def test_access_control_fix_is_verified_by_an_anonymous_request(remediation):
     rule = "routes.a01.unprotected-db-route"
     s = remediation(Script(candidates=[AUTH_FIXED], sandbox=["pass"], rescans=["fixed"], fixes=rule))
-    r, run = _run(s.seq(rule))
+    _r, run = _run(s.seq(rule))
     f = run["findings"][0]
     assert f["vuln_class"] == "Access control" and f["resolution"] == "verified_fixed", f["reason"]
     (probe,) = _security_tests(s)
@@ -335,7 +336,7 @@ def test_access_control_fix_is_verified_by_an_anonymous_request(remediation):
 def test_missing_security_headers_fix_is_verified_by_a_header_check(remediation):
     rule = "routes.config.missing-security-headers"
     s = remediation(Script(candidates=[NEXT_CONFIG_FIXED], sandbox=["pass"], rescans=["fixed"], fixes=rule))
-    r, run = _run(s.seq(rule))
+    _r, run = _run(s.seq(rule))
     f = run["findings"][0]
     assert f["vuln_class"] == "Misconfiguration" and f["resolution"] == "verified_fixed", f["reason"]
     assert f["region"] == {"file": "next.config.js", "start_line": 1, "end_line": 3, "exact": True}  # whole file
@@ -356,11 +357,11 @@ def test_browser_side_xss_runs_the_loop_on_the_rescan_and_says_why_it_is_inconcl
 
 
 def test_picker_groups_findings_by_class(remediation):
-    s = remediation(Script(candidates=[]))
-    from routes_cli.main import _pick_findings
-    from routes_cli.context import Context
-    from routes_cli import actions
+    remediation(Script(candidates=[]))
     from rich.console import Console
+    from routes_cli import actions
+    from routes_cli.context import Context
+    from routes_cli.main import _pick_findings
 
     con = Console(record=True, width=160, color_system=None)
     import typer

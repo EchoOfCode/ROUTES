@@ -27,10 +27,14 @@ from pathlib import Path
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
-
 from routes_shared.buildrun import TestCase
 from routes_shared.fingerprint import normalize_snippet
-from routes_shared.redaction import redact_for_llm, redact_text, restore, unredacted_secret_count
+from routes_shared.redaction import (
+    redact_for_llm,
+    redact_text,
+    restore,
+    unredacted_secret_count,
+)
 from routes_shared.remediation import Snapshot
 
 DEFAULT_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"

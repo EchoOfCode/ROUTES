@@ -34,20 +34,38 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 from routes_core.engine import EngineClient
 from routes_core.testplan import generate, runtime_check, vuln_class
-from routes_core.verification import BuildVerification, failure_summary, reanalyse, verify_build
+from routes_core.verification import (
+    BuildVerification,
+    failure_summary,
+    reanalyse,
+    verify_build,
+)
 from routes_shared.buildrun import PatchRejected, TestPlan, validate_patch
 from routes_shared.fingerprint import finding_identity, match_reanalysis
 from routes_shared.patching import unified_diff
 from routes_shared.remediation_workflow import (
-    EvidenceGrade, FindingEvidence, Resolution, Stage, can_transition, decide_finding, decide_run,
+    EvidenceGrade,
+    FindingEvidence,
+    Resolution,
+    Stage,
+    can_transition,
+    decide_finding,
+    decide_run,
 )
 
-from routes_cli.remediation.llm import ChatClient, FixPlan, LLMError, generate_patch, plan_fix, validate_candidate
+from routes_cli.remediation.llm import (
+    ChatClient,
+    FixPlan,
+    LLMError,
+    generate_patch,
+    plan_fix,
+    validate_candidate,
+)
 from routes_cli.remediation.source import RemediationSource, RemediationSourceError
 
 DEFAULT_MAX_ATTEMPTS = 3
@@ -706,7 +724,7 @@ def _combine(source: RemediationSource, accepted: list[FindingRun]) -> str:
     parts: list[str] = []
     for file, frs in by_file.items():
         original = source.read(file)
-        lines, trailing = _split(original)
+        lines, _trailing = _split(original)
         taken: list[tuple[int, int]] = []
         chosen = []
         for fr in frs:
