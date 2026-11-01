@@ -61,6 +61,16 @@ def test_evaluate_json_and_timing():
     assert outcome == "failed" and any("expected 1" in r for r in reasons) and any("limit" in r for r in reasons)
 
 
+def test_html_expectation_ignores_json_and_plain_text():
+    c = case("/x", html_not_contains=["<script>p()</script>"])
+    body = '{"q": "<script>p()</script>"}'
+    assert evaluate(c, 200, body, 5, None, {"Content-Type": "application/json"})[0] == "passed"
+    assert evaluate(c, 200, body, 5, None, {"Content-Type": "text/plain;charset=UTF-8"})[0] == "passed"
+    assert evaluate(c, 200, body, 5, None, {"Content-Type": "text/html; charset=utf-8"})[0] == "failed"
+    assert evaluate(c, 200, body, 5, None, {})[0] == "failed"            # no type: browsers sniff it as HTML
+    assert evaluate(c, 200, "&lt;script&gt;p()&lt;/script&gt;", 5, None, {"content-type": "text/html"})[0] == "passed"
+
+
 def test_header_expectations():
     c = case("/x", headers_present=["Content-Security-Policy", "x-frame-options"],
              header_not={"Access-Control-Allow-Origin": ["*", "https://probe.example"]})

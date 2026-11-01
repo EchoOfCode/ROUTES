@@ -21,6 +21,11 @@ from source_analyzer.data_flow.taint import Source, Taint, TaintEngine
 from source_analyzer.structure.parser import line, text, unwrap, walk
 from source_analyzer.structure.routes import Handler, RouteFile
 
+# HTML-output sanitisers: escaping / encoding helpers and the usual sanitiser libraries
+# (escapeHtml, he.encode, DOMPurify.sanitize, sanitizeHtml, encodeURIComponent, ...).
+# They make a value safe to put in a page; the SQL injection analysis does not use them.
+XSS_SANITISERS = re.compile(r"(?i)(?:^|\.)(?!un)[\w$]*(?:escape|encode|sanitiz|sanitis|purify|xss)[\w$]*$")
+
 _DOM_SOURCE_EXPR_RE = re.compile(
     r"^(window\.)?(location\.(search|hash|href|pathname)|document\.referrer|window\.name)$"
 )
@@ -81,7 +86,7 @@ class XssAnalyzer:
 
     # ------------------------------------------------------------- DOM sinks
     def _scan_dom_sinks(self, rel: str, fn: Node) -> None:
-        engine = TaintEngine(fn, extra_seed=_dom_source)
+        engine = TaintEngine(fn, extra_seed=_dom_source, extra_sanitisers=XSS_SANITISERS)
         for node in walk(fn.child_by_field_name("body") or fn):
             if node.type == "assignment_expression":
                 left = unwrap(node.child_by_field_name("left"))
@@ -108,7 +113,7 @@ class XssAnalyzer:
         request_params = {handler.request_param_index: "request"}
         if handler.context_param_index is not None:
             request_params[handler.context_param_index] = "context"
-        engine = TaintEngine(fn, request_params=request_params)
+        engine = TaintEngine(fn, request_params=request_params, extra_sanitisers=XSS_SANITISERS)
         for node in walk(fn.child_by_field_name("body") or fn):
             if node.type != "new_expression":
                 continue

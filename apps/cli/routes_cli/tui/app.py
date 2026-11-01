@@ -429,7 +429,8 @@ class RoutesApp(App):
                 plan = generated.plan
             else:
                 plan = _json.loads(Path(cmd.options["--tests"]).expanduser().read_text("utf-8"))
-            patch = Path(cmd.options["--patch"]).expanduser().read_text("utf-8") if "--patch" in cmd.options else None
+            patch = (Path(cmd.options["--patch"]).expanduser().read_bytes().decode("utf-8")  # keep CRLF lines
+                     if "--patch" in cmd.options else None)
             approved = [x.strip() for x in cmd.options.get("--approve", "").split(",") if x.strip()]
             req = BuildRunRequest(source=spec, test_plan=plan, patch=patch, approved_scripts=approved,
                                   requested_by="routes-tui")

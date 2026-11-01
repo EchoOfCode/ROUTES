@@ -476,7 +476,8 @@ class Workflow:
             candidate_file = _replace_region(original_file, snap.start_line, snap.end_line, cand.code)
             problems = validate_candidate(snap.file, original_file, candidate_file, snap.code, cand.code,
                                           allowed_modules=self.allowed_modules)
-            diff = unified_diff(snap.file, snap.start_line, snap.code, cand.code) if not problems else ""
+            diff = _line_endings_of(original_file, unified_diff(snap.file, snap.start_line, snap.code, cand.code)) \
+                if not problems else ""
             if not problems:
                 try:
                     validate_patch(diff)
@@ -700,6 +701,21 @@ def _build_summary(v: BuildVerification) -> dict:
             "cleanup": (v.cleanup or {}).get("status") if isinstance(v.cleanup, dict) else v.cleanup}
 
 
+def _line_endings_of(content: str, diff: str) -> str:
+    """Give the diff's context/removed/added lines the file's own line endings.
+
+    A file checked out with CRLF (Git on Windows) only matches a patch whose lines
+    end in CRLF too; the sandbox applies patches strictly, without whitespace fuzz.
+    Header and hunk lines stay LF, as `git apply` expects."""
+    if "\r\n" not in content:
+        return diff
+    out = []
+    for line in diff.split("\n"):
+        body = line[:1] in (" ", "-", "+") and not line.startswith(("--- ", "+++ "))
+        out.append(line + "\r" if body and not line.endswith("\r") else line)
+    return "\n".join(out)
+
+
 def _split(content: str) -> tuple[list[str], bool]:
     text = content.replace("\r\n", "\n")
     trailing = text.endswith("\n")
@@ -738,7 +754,7 @@ def _combine(source: RemediationSource, accepted: list[FindingRun]) -> str:
         for fr in sorted(chosen, key=lambda x: x.accepted_region[0], reverse=True):
             s, e, code = fr.accepted_region
             new_lines[s - 1:e] = code.rstrip("\n").split("\n")
-        parts.append(unified_diff(file, 1, "\n".join(lines), "\n".join(new_lines)))
+        parts.append(_line_endings_of(original, unified_diff(file, 1, "\n".join(lines), "\n".join(new_lines))))
     return "".join(parts)
 
 

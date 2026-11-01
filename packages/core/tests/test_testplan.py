@@ -73,7 +73,7 @@ def test_reflected_xss_sends_markers_in_the_traced_input():
            technical_details={"source": {"kind": "query", "name": "name"}})
     tests = [t for t in generate([], [f]).plan["tests"] if t["category"] == "security"]
     assert [t["request"]["query"]["name"] for t in tests] == XSS_MARKERS
-    assert all(t["expect"]["body_not_contains"] == [t["request"]["query"]["name"]] for t in tests)
+    assert all(t["expect"]["html_not_contains"] == [t["request"]["query"]["name"]] for t in tests)
     assert vuln_class(f) == "XSS" and runtime_check(f)[0].startswith("script markers")
 
 

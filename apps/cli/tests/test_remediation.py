@@ -375,3 +375,29 @@ def test_picker_groups_findings_by_class(remediation):
     for label in ("SQL injection", "XSS", "Access control", "Misconfiguration"):
         assert label in text
     assert "next.config.js" in text
+
+
+def test_patches_keep_the_files_line_endings(tmp_path):
+    """Git on Windows checks files out with CRLF; the sandbox applies patches with a
+    strict `git apply`, so the diff must carry the file's own line endings."""
+    import shutil
+    import subprocess
+
+    from routes_shared.patching import apply_unified_diff, unified_diff
+
+    from routes_cli.remediation.workflow import _line_endings_of
+
+    for eol in ("\r\n", "\n"):
+        root = tmp_path / ("crlf" if eol == "\r\n" else "lf")
+        (root / "app").mkdir(parents=True)
+        original = ROUTE.replace("\n", eol)
+        (root / "app/route.js").write_bytes(original.encode())
+        region = "\n".join(ROUTE.splitlines()[0:8])
+        diff = _line_endings_of(original, unified_diff("app/route.js", 1, region, FIXED))
+        if shutil.which("git"):
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            subprocess.run(["git", "-c", "core.autocrlf=false", "apply", "--check", "-"], cwd=root,
+                           input=diff.encode(), check=True)
+        apply_unified_diff(root, diff)
+        patched = (root / "app/route.js").read_bytes().decode()
+        assert "$1" in patched and patched.count("\r\n") == (patched.count("\n") if eol == "\r\n" else 0)

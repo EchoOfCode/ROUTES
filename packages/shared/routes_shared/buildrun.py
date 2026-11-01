@@ -214,6 +214,9 @@ class TestExpect(_Strict):
     max_ms: int | None = Field(default=None, gt=0, le=120_000)
     # Response headers (names are case-insensitive): each must be present / must not have any of these values.
     headers_present: list[str] = Field(default_factory=list, max_length=30)
+    # Must not appear verbatim when the response is rendered as HTML (Content-Type html/xml, or none).
+    # A JSON or plain-text body carrying the same characters is not script the browser runs.
+    html_not_contains: list[str] = Field(default_factory=list, max_length=50)
     header_not: dict[str, list[str]] = Field(default_factory=dict)
 
     @field_validator("headers_present")

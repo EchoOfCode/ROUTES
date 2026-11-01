@@ -58,6 +58,11 @@ def evaluate(case: TestCase, status: int | None, body: str, elapsed_ms: int, err
     if exp.max_ms is not None and elapsed_ms > exp.max_ms:
         reasons.append(f"took {elapsed_ms} ms (limit {exp.max_ms} ms)")
     got = {k.lower(): v for k, v in (headers or {}).items()}
+    content_type = got.get("content-type", "").lower()
+    if exp.html_not_contains and (not content_type or "html" in content_type or "xml" in content_type):
+        for text in exp.html_not_contains:
+            if text in body:
+                reasons.append(f"HTML response contains {text!r} unescaped")
     for name in exp.headers_present:
         if not got.get(name, "").strip():
             reasons.append(f"response header {name!r} is missing")

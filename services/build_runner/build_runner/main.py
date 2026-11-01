@@ -141,13 +141,15 @@ class Runner:
         path = INPUT / "patch.diff"
         if not path.is_file():
             return {"applied": False, "files": []}
-        text = path.read_text("utf-8", "replace")
+        # Bytes, not read_text(): universal newlines would turn the patch's CRLF lines into LF,
+        # and a CRLF source file (e.g. checked out by Git on Windows) would then not match.
+        text = path.read_bytes().decode("utf-8", "replace")
         try:
             files = validate_patch(text)
         except PatchRejected as exc:
             raise Stop(Verification.INCONCLUSIVE, "patch", f"The candidate patch was rejected: {exc}") from exc
         local = WORK / "tmp" / "candidate.diff"
-        local.write_text(text, "utf-8")
+        local.write_bytes(text.encode("utf-8"))
         env = {**self.base_env(), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"}
         check = procs.run(["git", "apply", "--check", "--whitespace=nowarn", str(local)], cwd=str(self.src), env=env,
                           timeout=60, tail_bytes=4096)
