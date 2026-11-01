@@ -126,6 +126,7 @@ def shannon_entropy(s: str) -> float:
 # kind consistent (a '...' literal is never closed by a " or `).
 _ENTROPY_STRING_RE = re.compile(r"""(['"`])((?:\\.|(?!\1).){16,})\1""")
 _ENTROPY_THRESHOLD = 4.0
+_PROSE_MIN_WORDS = 3   # entropy pass: literals with this many words are text, not tokens
 
 
 def redact_for_llm(text: str | None) -> tuple[str, dict[str, str]]:
@@ -163,6 +164,11 @@ def redact_for_llm(text: str | None) -> tuple[str, dict[str, str]]:
         value = m.group(2)
         if "<SECRET_" in value:
             return m.group(0)  # already redacted by an earlier pass - never re-wrap
+        if len(value.split()) >= _PROSE_MIN_WORDS:
+            # A sentence, SQL statement or markup (several space-separated words) scores high on
+            # character entropy but is not a token; hiding it would hide the vulnerable code itself.
+            # Secrets inside it are still caught by the keyword and known-format passes above.
+            return m.group(0)
         if shannon_entropy(value) > _ENTROPY_THRESHOLD:
             return f"{m.group(1)}{_placeholder_for(value)}{m.group(1)}"
         return m.group(0)

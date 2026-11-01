@@ -98,16 +98,20 @@ class FunctionFacts:
 
 class TaintEngine:
     def __init__(self, fn: Node, *, request_params: dict[int, str] | None = None, taint_params: bool = False,
-                 is_pool_expr=None, extra_seed=None):
+                 is_pool_expr=None, extra_seed=None, extra_sanitisers=None):
         """request_params: {parameter index: base} where base is "request" or "context".
         taint_params: treat every parameter as a source (used for helper summaries).
         extra_seed: optional callable(node) -> Source | None, consulted before the normal
         type dispatch in taint_of(); used to recognise sources that are not function
-        parameters, such as global browser state (location.search, document.referrer)."""
+        parameters, such as global browser state (location.search, document.referrer).
+        extra_sanitisers: optional compiled regex; a call whose callee text matches it
+        clears the taint. Class-specific: HTML escaping makes a value safe for a page,
+        not for SQL, so only the XSS analysis passes one."""
         self.fn = fn
         self.facts = FunctionFacts()
         self.is_pool_expr = is_pool_expr or (lambda node, facts: False)
         self.extra_seed = extra_seed
+        self.extra_sanitisers = extra_sanitisers
         for i, p in enumerate(_params(fn)):
             for name in pattern_names(p):
                 self.facts.params[name] = i
@@ -273,6 +277,8 @@ class TaintEngine:
         if callee is None:
             return None
         if callee.type == "identifier" and text(callee) in SANITISER_CALLS:
+            return None
+        if self.extra_sanitisers is not None and callee.type in ("identifier", "member_expression")                 and self.extra_sanitisers.search(text(callee)):
             return None
         if callee.type == "member_expression":
             obj = callee.child_by_field_name("object")

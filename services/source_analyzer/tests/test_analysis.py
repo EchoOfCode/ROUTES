@@ -257,3 +257,25 @@ def test_main_reports_fatal_for_bad_archive(tmp_path, monkeypatch, capsys):
     assert out.startswith("ROUTES_RESULT ")
     data = json.loads(out[len("ROUTES_RESULT "):])
     assert data["fatal"] is True and "Upload it again" in data["error"]
+
+
+def test_html_escaping_clears_reflected_xss_but_not_sql_injection(tmp_path_factory):
+    """An escaped value is safe in a page, so the XSS check accepts the fix; HTML
+    escaping is not SQL escaping, so the same helper never hides an injection."""
+    escaped = (
+        'import { Pool } from "pg";\n'
+        "const pool = new Pool();\n"
+        "function escapeHtml(s) { return s.replace(/[&<>\"']/g, (c) => `&#${c.charCodeAt(0)};`); }\n"
+        "export async function GET(request) {\n"
+        '  const name = new URL(request.url).searchParams.get("name");\n'
+        "  await pool.query(`SELECT 1 WHERE 'x' = '${escapeHtml(name)}'`);\n"
+        "  return new Response(`<h1>${escapeHtml(name)}</h1>`, { headers: { 'Content-Type': 'text/html' } });\n"
+        "}\n"
+    )
+    unescaped_variant = escaped.replace("<h1>${escapeHtml(name)}</h1>", "<h1>${he.unescape(name)}</h1>")
+    result = run_fixture("nextjs-pg", tmp_path_factory.mktemp("esc"), "shop.acme-demo.com",
+                         extra={"app/api/greet/route.ts": escaped, "app/api/greet2/route.ts": unescaped_variant})
+    reflected = {f["file"] for f in xss(result) if f["rule_id"] == "routes.xss.reflected-response"}
+    assert "app/api/greet/route.ts" not in reflected          # escapeHtml(): fixed
+    assert "app/api/greet2/route.ts" in reflected             # unescape() is not a sanitiser
+    assert "app/api/greet/route.ts" in {f["file"] for f in sqli(result)}   # still SQL injection

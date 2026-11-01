@@ -12,9 +12,9 @@ import json
 
 import httpx
 import pytest
+from routes_cli.remediation import llm as llm_mod
 
 import tests.conftest as cf
-from routes_cli.remediation import llm as llm_mod
 from tests.test_commands import invoke
 
 HEADER = 'import { pool } from "@/lib/db";\n\n'
@@ -43,7 +43,7 @@ WRONG = HEADER + (
     "}"
 )
 WITH_IMPORT = 'import sqlstring from "sqlstring";\n' + FIXED
-AUTH_FIXED = ('import { pool } from "@/lib/db";\nimport { auth } from "@/auth";\n\n'
+AUTH_FIXED = ('import { pool } from "@/lib/db";\nimport { auth } from "../../../lib/auth";\n\n'
               "export async function GET(req) {\n"
               "  const session = await auth();\n"
               "  if (!session?.user) return new Response('Unauthorized', { status: 401 });\n"
@@ -71,6 +71,8 @@ def app_project(tmp_path, monkeypatch):
     (root / "app/api/search/route.ts").write_text(ROUTE, newline="\n")
     (root / "app/page.tsx").write_text(PAGE, newline="\n")
     (root / "next.config.js").write_text(NEXT_CONFIG, newline="\n")
+    (root / "lib").mkdir()
+    (root / "lib/auth.js").write_text("export async function auth() { return null; }\n", newline="\n")
     (root / "package.json").write_text('{"dependencies": {"next": "15.0.0", "pg": "8.0.0"}}')
     result = json.loads(json.dumps(cf.SOURCE_RESULT))
     sqli = result["findings"][0]
@@ -255,7 +257,7 @@ def test_oscillation_stops_the_loop_for_human_review(remediation):
 
 def test_invalid_candidate_never_reaches_the_sandbox(remediation):
     s = remediation(Script(candidates=[WITH_IMPORT]))
-    r, run = _run(s.seq("routes.sqli.pg-tainted-query"), "--attempts", "1")
+    _r, run = _run(s.seq("routes.sqli.pg-tainted-query"), "--attempts", "1")
     f = run["findings"][0]
     assert f["attempts"][0]["outcome"] == "rejected" and "new imports" in f["attempts"][0]["failure"]
     assert f["resolution"] == "human_review"
@@ -273,8 +275,8 @@ def test_unbuildable_app_falls_back_to_rescan_and_is_only_inconclusive(remediati
 
 def test_engine_unavailable_stops_before_any_model_call(remediation, monkeypatch):
     s = remediation(Script(candidates=[]))
-    from routes_core.engine import EngineUnavailable
     from routes_cli.context import Context
+    from routes_core.engine import EngineUnavailable
 
     class Down(RemediationEngine):
         def health(self):
@@ -294,6 +296,7 @@ def test_non_interactive_needs_ids_and_confirmation(remediation):
 
 async def test_tui_remediate_confirms_shows_the_pipeline_and_the_verdict(remediation):
     from routes_cli.tui.modals import ConfirmModal
+
     from tests.test_tui import make_app, type_text, wait_for
 
     s = remediation(Script(candidates=[WRONG, FIXED], sandbox=["fail", "pass"], rescans=["fixed"]))
@@ -320,7 +323,7 @@ def _security_tests(s: Script) -> list[dict]:
 def test_access_control_fix_is_verified_by_an_anonymous_request(remediation):
     rule = "routes.a01.unprotected-db-route"
     s = remediation(Script(candidates=[AUTH_FIXED], sandbox=["pass"], rescans=["fixed"], fixes=rule))
-    r, run = _run(s.seq(rule))
+    _r, run = _run(s.seq(rule))
     f = run["findings"][0]
     assert f["vuln_class"] == "Access control" and f["resolution"] == "verified_fixed", f["reason"]
     (probe,) = _security_tests(s)
@@ -329,13 +332,15 @@ def test_access_control_fix_is_verified_by_an_anonymous_request(remediation):
     # Importing the project's own auth helper is allowed (not a new dependency), and Model B was told
     # what the sandbox would check.
     assert "an anonymous request must be rejected" in s.prompts_b[0]
-    assert '+import { auth } from "@/auth";' in f["attempts"][0]["patch"]
+    assert '+import { auth } from "../../../lib/auth";' in f["attempts"][0]["patch"]
+    # Model B was told where the project's session helper is and how to import it.
+    assert "import { auth } from '../../../lib/auth'" in s.prompts_b[0]
 
 
 def test_missing_security_headers_fix_is_verified_by_a_header_check(remediation):
     rule = "routes.config.missing-security-headers"
     s = remediation(Script(candidates=[NEXT_CONFIG_FIXED], sandbox=["pass"], rescans=["fixed"], fixes=rule))
-    r, run = _run(s.seq(rule))
+    _r, run = _run(s.seq(rule))
     f = run["findings"][0]
     assert f["vuln_class"] == "Misconfiguration" and f["resolution"] == "verified_fixed", f["reason"]
     assert f["region"] == {"file": "next.config.js", "start_line": 1, "end_line": 3, "exact": True}  # whole file
@@ -356,11 +361,11 @@ def test_browser_side_xss_runs_the_loop_on_the_rescan_and_says_why_it_is_inconcl
 
 
 def test_picker_groups_findings_by_class(remediation):
-    s = remediation(Script(candidates=[]))
-    from routes_cli.main import _pick_findings
-    from routes_cli.context import Context
-    from routes_cli import actions
+    remediation(Script(candidates=[]))
     from rich.console import Console
+    from routes_cli import actions
+    from routes_cli.context import Context
+    from routes_cli.main import _pick_findings
 
     con = Console(record=True, width=160, color_system=None)
     import typer
@@ -374,3 +379,52 @@ def test_picker_groups_findings_by_class(remediation):
     for label in ("SQL injection", "XSS", "Access control", "Misconfiguration"):
         assert label in text
     assert "next.config.js" in text
+
+
+def test_patches_keep_the_files_line_endings(tmp_path):
+    """Git on Windows checks files out with CRLF; the sandbox applies patches with a
+    strict `git apply`, so the diff must carry the file's own line endings."""
+    import shutil
+    import subprocess
+
+    from routes_shared.patching import apply_unified_diff, unified_diff
+
+    from routes_cli.remediation.workflow import _line_endings_of
+
+    for eol in ("\r\n", "\n"):
+        root = tmp_path / ("crlf" if eol == "\r\n" else "lf")
+        (root / "app").mkdir(parents=True)
+        original = ROUTE.replace("\n", eol)
+        (root / "app/route.js").write_bytes(original.encode())
+        region = "\n".join(ROUTE.splitlines()[0:8])
+        diff = _line_endings_of(original, unified_diff("app/route.js", 1, region, FIXED))
+        if shutil.which("git"):
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            subprocess.run(["git", "-c", "core.autocrlf=false", "apply", "--check", "-"], cwd=root,
+                           input=diff.encode(), check=True)
+        apply_unified_diff(root, diff)
+        patched = (root / "app/route.js").read_bytes().decode()
+        assert "$1" in patched and patched.count("\r\n") == (patched.count("\n") if eol == "\r\n" else 0)
+
+
+def test_imports_that_would_not_resolve_are_rejected_before_the_sandbox(remediation):
+    """A new import must resolve in the project (relative file, defined alias, or a dependency):
+    otherwise it breaks the build, so it is rejected with the exact reason for Model B."""
+    bad_alias = AUTH_FIXED.replace('"../../../lib/auth"', '"@/lib/auth"')
+    rule = "routes.a01.unprotected-db-route"
+    s = remediation(Script(candidates=[bad_alias, AUTH_FIXED], sandbox=["pass"], rescans=["fixed"], fixes=rule))
+    _r, run = _run(s.seq(rule))
+    f = run["findings"][0]
+    assert [a["outcome"] for a in f["attempts"]] == ["rejected", "passed"]
+    assert "defines no '@/' path alias" in f["attempts"][0]["failure"]
+    assert "defines no '@/' path alias" in s.prompts_b[1]          # fed back to the next attempt
+    assert f["resolution"] == "verified_fixed"
+
+
+def test_build_failure_feedback_includes_the_build_output():
+    from routes_core.verification import failure_summary, parse_build_run
+
+    state = {"id": "r", "status": "completed", "result": {
+        "verification": "BUILD_FAILED", "failed_stage": "build", "error": "The production build failed (exit code 1).",
+        "stages": {"build": {"log_tail": "Creating build\nModule not found: Can't resolve 'x'\nBuild failed"}}}}
+    assert "Module not found: Can't resolve 'x'" in failure_summary(parse_build_run(state))

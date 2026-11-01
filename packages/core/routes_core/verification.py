@@ -63,6 +63,7 @@ class BuildVerification:
     duration_seconds: float | None
     started_at: float | None = None
     finished_at: float | None = None
+    log_tail: str = ""              # end of the failed stage's output (redacted), e.g. the compiler error
 
     @property
     def passed(self) -> bool:
@@ -100,7 +101,15 @@ def parse_build_run(state: dict) -> BuildVerification:
         commit=source.get("commit"), patch_applied=bool((source.get("patch") or {}).get("applied")),
         isolation_violations=violations, duration_seconds=result.get("duration_seconds"),
         started_at=state.get("created_at"), finished_at=state.get("finished_at"),
+        log_tail=_stage_tail(result.get("failed_stage"), stages),
     )
+
+
+def _stage_tail(failed_stage: str | None, stages: dict, max_lines: int = 25) -> str:
+    stage = stages.get(failed_stage or "") or {}
+    text = str(stage.get("log_tail") or stage.get("app_log_tail") or stage.get("error") or "")
+    lines = [ln for ln in text.strip().splitlines() if ln.strip()][-max_lines:]
+    return redact_text("\n".join(ln[:240] for ln in lines), max_length=3000)
 
 
 def verify_build(client: EngineClient, *, source: SourceSpec, plan: dict, patch: str | None, cache_dir: Path,
@@ -115,12 +124,14 @@ def verify_build(client: EngineClient, *, source: SourceSpec, plan: dict, patch:
     return parse_build_run(final)
 
 
-def failure_summary(v: BuildVerification, *, limit: int = 1500) -> str:
+def failure_summary(v: BuildVerification, *, limit: int = 2500) -> str:
     """Actual, sanitised failure evidence for the correction step: what broke
     and how each failing test differed from what was expected."""
     parts: list[str] = []
     if v.verification == "BUILD_FAILED":
         parts.append(f"The candidate failed at the {v.failed_stage or 'build'} stage: {v.error or 'no detail'}")
+        if v.log_tail:
+            parts.append(f"End of the {v.failed_stage or 'build'} output:\n{v.log_tail}")
     elif v.infrastructure_failure:
         parts.append(f"Verification could not complete ({v.verification}): {v.error or 'no detail'}")
     for c in v.cases:

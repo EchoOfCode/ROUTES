@@ -421,7 +421,7 @@ def _execute_build_and_run(ctx: Context, source: str, tests: str = "auto", patch
             _print_generated(notice, generated, None)
         else:
             plan_data = json.loads(Path(tests).read_text("utf-8"))
-        patch_text = Path(patch).read_text("utf-8") if patch else None
+        patch_text = Path(patch).read_bytes().decode("utf-8") if patch else None  # keep CRLF lines intact
     except (SourceError, PlanError) as exc:
         _fail(str(exc))
     except (OSError, ValueError) as exc:
@@ -711,7 +711,7 @@ def _after_remediation(ctx: Context, a, source, saved) -> None:
         if not typer.confirm(f"Modify files in {source.spec.label}?", default=False):
             return
         try:
-            files = rem.apply_patch(source.spec.path, saved.combined.read_text("utf-8"))
+            files = rem.apply_patch(source.spec.path, saved.combined.read_bytes().decode("utf-8"))
         except Exception as exc:  # noqa: BLE001 - PatchRejected or OSError: nothing was written
             con.print(f"[err]Not applied:[/] {escape(str(exc))} (no file was changed)")
             return

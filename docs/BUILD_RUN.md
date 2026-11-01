@@ -95,7 +95,8 @@ smuggling are refused.
 
 Categories are `security`, `functional`, `edge` and `health`. Expectations are
 `status`, `status_not`, `body_contains`, `body_not_contains`, `json_equals`
-(top-level keys), `max_ms`, `headers_present` (response headers that must be sent) and `header_not`
+(top-level keys), `max_ms`, `html_not_contains` (text that must not appear when the response is HTML:
+Content-Type html/xml or none), `headers_present` (response headers that must be sent) and `header_not`
 (header -> values it must not have, e.g. `{"access-control-allow-origin": ["*"]}`). Header names are
 case-insensitive.
 

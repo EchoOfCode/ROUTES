@@ -159,3 +159,16 @@ def test_mask_string_literals_handles_quotes_and_escapes():
 def test_mask_string_literals_leaves_short_literals_alone():
     code = 'res.status(404).send("nope");'
     assert mask_string_literals(code) == code
+
+
+def test_redact_for_llm_keeps_sql_and_sentences_but_not_secrets_inside_them():
+    sql = "SELECT id, name, slug, price FROM products WHERE is_active = TRUE AND name ILIKE '%${q}%' LIMIT 20"
+    out, placeholder_map = redact_for_llm(f"const sql = `{sql}`;")
+    assert sql in out and placeholder_map == {}
+    # A known-format secret inside a sentence is still redacted.
+    text = 'log("connecting with key AKIAIOSFODNN7EXAMPLE to the bucket now");'
+    out, placeholder_map = redact_for_llm(text)
+    assert "AKIAIOSFODNN7EXAMPLE" not in out and restore(out, placeholder_map) == text
+    # Two-word values are still entropy-checked.
+    out, _ = redact_for_llm('const t = "Zx9Qp2Lm7Rk4 Vt8Wn3Bc6Yd1Jh5Fs0Ae";')
+    assert "Zx9Qp2Lm7Rk4" not in out

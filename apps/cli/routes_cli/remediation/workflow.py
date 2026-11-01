@@ -32,22 +32,41 @@ With several findings, the accepted patches are combined and checked together
 
 from __future__ import annotations
 
+import posixpath
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 from routes_core.engine import EngineClient
 from routes_core.testplan import generate, runtime_check, vuln_class
-from routes_core.verification import BuildVerification, failure_summary, reanalyse, verify_build
+from routes_core.verification import (
+    BuildVerification,
+    failure_summary,
+    reanalyse,
+    verify_build,
+)
 from routes_shared.buildrun import PatchRejected, TestPlan, validate_patch
 from routes_shared.fingerprint import finding_identity, match_reanalysis
 from routes_shared.patching import unified_diff
 from routes_shared.remediation_workflow import (
-    EvidenceGrade, FindingEvidence, Resolution, Stage, can_transition, decide_finding, decide_run,
+    EvidenceGrade,
+    FindingEvidence,
+    Resolution,
+    Stage,
+    can_transition,
+    decide_finding,
+    decide_run,
 )
 
-from routes_cli.remediation.llm import ChatClient, FixPlan, LLMError, generate_patch, plan_fix, validate_candidate
+from routes_cli.remediation.llm import (
+    ChatClient,
+    FixPlan,
+    LLMError,
+    generate_patch,
+    plan_fix,
+    validate_candidate,
+)
 from routes_cli.remediation.source import RemediationSource, RemediationSourceError
 
 DEFAULT_MAX_ATTEMPTS = 3
@@ -191,6 +210,7 @@ class Workflow:
         self.baseline_identities = {f.fingerprint: finding_identity(_finding_dict(f)) for f in assessment.findings}
         self._client: EngineClient | None = None
         self.allowed_modules = _project_modules(services.source)
+        self.path_aliases = _path_aliases(services.source)
 
     # -------------------------------------------------------------- helpers
     def _changed(self) -> None:
@@ -438,7 +458,8 @@ class Workflow:
             # Model B
             self._astep(a, "patch", "running", f"Model B ({self.s.model_b.model}) is writing the fix")
             cand = generate_patch(self.s.model_b, plan, snap, previous_failure=previous_failure,
-                                  verification=fr.runtime_check, allowed_modules=self.allowed_modules)
+                                  verification=fr.runtime_check, allowed_modules=self.allowed_modules,
+                                  hints=self._hints(fr, snap.file))
             a.candidate_hash = cand.hash
             self._astep(a, "patch", "done", f"{len(cand.code.splitlines())} lines")
 
@@ -458,7 +479,11 @@ class Workflow:
             candidate_file = _replace_region(original_file, snap.start_line, snap.end_line, cand.code)
             problems = validate_candidate(snap.file, original_file, candidate_file, snap.code, cand.code,
                                           allowed_modules=self.allowed_modules)
-            diff = unified_diff(snap.file, snap.start_line, snap.code, cand.code) if not problems else ""
+            if not problems:
+                problems = _unresolved_imports(self.s.source, snap.file, original_file, candidate_file,
+                                               self.path_aliases)
+            diff = _line_endings_of(original_file, unified_diff(snap.file, snap.start_line, snap.code, cand.code)) \
+                if not problems else ""
             if not problems:
                 try:
                     validate_patch(diff)
@@ -551,6 +576,51 @@ class Workflow:
         ev.human_review_reason = (f"Every allowed patch attempt ({fr.max_attempts}) was used without passing all "
                                   "checks.")
         self._step(fr, "loop", "failed", f"{fr.max_attempts} attempt(s) used, none passed")
+
+    def _hints(self, fr: FindingRun, file: str) -> str:
+        """Project facts Model B cannot see in the snapshot."""
+        if fr.vuln_class != "Access control":
+            return ""
+        if not hasattr(self, "_auth_module"):
+            self._auth_module = next((m for m in (_exists(self.s.source, c) for c in AUTH_MODULE_CANDIDATES) if m),
+                                     None)
+        if self._auth_module is None:
+            return ""
+        import re
+
+        text = self.s.source.read(self._auth_module)
+        helper = next((h for h in ("auth", "getServerSession", "getSession", "getCurrentUser")
+                       if re.search(rf"export\s+(?:async\s+)?(?:function\s+{h}\b|const\s+\{{?[^=]*\b{h}\b)", text)), None)
+        if helper is None:
+            return ""
+        hint = (f"The project's session helper is `{helper}` in {self._auth_module}. From {file} import it with "
+                f"exactly: import {{ {helper} }} from '{_relative_import(file, self._auth_module)}';  "
+                f"Call {helper}() at the top of the handler; it returns null when nobody is signed in.")
+        text = self._project_text()
+        roles = set(re.findall(r"\brole\s*(?:===?|:)\s*['\"](\w+)['\"]", text))
+        if re.search(r"\brole\s+(?:varchar|text|character|user_role)\b", text, re.IGNORECASE):
+            default = re.search(r"\brole\s+(?:varchar|text|character|user_role)\b[^,\n]*\bdefault\s+'(\w+)'", text, re.IGNORECASE)
+            if default:
+                roles.add(default.group(1))
+            roles.update(r for r in ("admin", "administrator") if f"'{r}'" in text)
+        roles = sorted(roles)
+        if roles:
+            hint += (f" A signed-in user's role is in session.user.role (values seen in this project's code and data: "
+                     f"{', '.join(roles[:6])}); there is no other admin flag.")
+        if fr.rule_id == "routes.a01.unprotected-db-route":
+            hint += (" The fix is a check BEFORE the database call. Leave the existing SQL query and its parameters "
+                     "exactly as they are: do not add conditions or columns to it (they may not exist in the schema).")
+        return hint
+
+    def _project_text(self) -> str:
+        """Small, known files that show how roles are written (auth helper, seed data)."""
+        out = []
+        for rel in (self._auth_module, "database/seed.sql", "database/schema.sql", "prisma/schema.prisma"):
+            try:
+                out.append(self.s.source.read(rel)[:200_000])
+            except (RemediationSourceError, TypeError):
+                continue
+        return "\n".join(out)
 
     def _rescan(self, patch: str, targeted: set[str]) -> dict:
         r = reanalyse(self.client, source=self.s.source.rescan_spec(), patch=patch, cache_dir=self.s.cache_dir,
@@ -645,6 +715,76 @@ def _finding_dict(f) -> dict:
             "technical_details": f.technical_details or {}}
 
 
+SOURCE_EXTENSIONS = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
+AUTH_MODULE_CANDIDATES = ("auth", "lib/auth", "src/auth", "src/lib/auth", "app/lib/auth", "utils/auth", "lib/session")
+
+
+def _exists(source: RemediationSource, rel: str) -> str | None:
+    """`rel` (no extension) as an existing source file: the file itself, rel.<ext> or rel/index.<ext>."""
+    rel = posixpath.normpath(rel)
+    if rel.startswith(".."):
+        return None
+    for cand in (rel, *(rel + e for e in SOURCE_EXTENSIONS), *(f"{rel}/index{e}" for e in SOURCE_EXTENSIONS)):
+        try:
+            source.read(cand)
+            return cand
+        except RemediationSourceError:
+            continue
+    return None
+
+
+def _path_aliases(source: RemediationSource) -> dict[str, str]:
+    """`compilerOptions.paths` of jsconfig/tsconfig as prefix -> directory, e.g. {"@/": "src/"}."""
+    import json
+    import re
+
+    out: dict[str, str] = {}
+    for name in ("tsconfig.json", "jsconfig.json"):
+        try:
+            text = source.read(name)
+        except RemediationSourceError:
+            continue
+        try:
+            opts = json.loads(re.sub(r"(?m)^\s*//.*$", "", text)).get("compilerOptions") or {}
+        except ValueError:
+            continue
+        base = (opts.get("baseUrl") or ".").strip("./")
+        for pattern, targets in (opts.get("paths") or {}).items():
+            if pattern.endswith("/*") and targets:
+                target = str(targets[0]).rstrip("*").lstrip("./")
+                out[pattern[:-1]] = posixpath.join(base, target) if base else target
+    return out
+
+
+def _unresolved_imports(source: RemediationSource, file: str, original_file: str, candidate_file: str,
+                        aliases: dict[str, str]) -> list[str]:
+    """New imports of project modules that would not resolve: they fail the build, so reject them
+    before the sandbox, with the exact reason for the next attempt."""
+    from routes_cli.remediation.llm import _modules
+
+    here = posixpath.dirname(file)
+    problems = []
+    for module in sorted(_modules(candidate_file) - _modules(original_file)):
+        if module.startswith("."):
+            if _exists(source, posixpath.join(here, module)) is None:
+                problems.append(f"The import '{module}' does not resolve from {file}: no such file in the project.")
+            continue
+        prefix = next((p for p in aliases if module.startswith(p)), None)
+        if prefix is not None:
+            if _exists(source, aliases[prefix] + module[len(prefix):]) is None:
+                problems.append(f"The import '{module}' does not resolve: no such file in the project.")
+        elif module.startswith(("@/", "~/", "#")):
+            problems.append(f"The import '{module}' does not resolve: this project defines no '{module.split('/')[0]}/' "
+                            "path alias (jsconfig/tsconfig paths). Use a relative path such as the file's existing "
+                            "imports do.")
+    return problems
+
+
+def _relative_import(from_file: str, target: str) -> str:
+    rel = posixpath.relpath(posixpath.splitext(target)[0], posixpath.dirname(from_file) or ".")
+    return rel if rel.startswith(".") else "./" + rel
+
+
 def _project_modules(source: RemediationSource) -> set[str]:
     """Packages the project already depends on: importing them is not a new dependency."""
     import json
@@ -682,6 +822,21 @@ def _build_summary(v: BuildVerification) -> dict:
             "cleanup": (v.cleanup or {}).get("status") if isinstance(v.cleanup, dict) else v.cleanup}
 
 
+def _line_endings_of(content: str, diff: str) -> str:
+    """Give the diff's context/removed/added lines the file's own line endings.
+
+    A file checked out with CRLF (Git on Windows) only matches a patch whose lines
+    end in CRLF too; the sandbox applies patches strictly, without whitespace fuzz.
+    Header and hunk lines stay LF, as `git apply` expects."""
+    if "\r\n" not in content:
+        return diff
+    out = []
+    for line in diff.split("\n"):
+        body = line[:1] in (" ", "-", "+") and not line.startswith(("--- ", "+++ "))
+        out.append(line + "\r" if body and not line.endswith("\r") else line)
+    return "\n".join(out)
+
+
 def _split(content: str) -> tuple[list[str], bool]:
     text = content.replace("\r\n", "\n")
     trailing = text.endswith("\n")
@@ -706,7 +861,7 @@ def _combine(source: RemediationSource, accepted: list[FindingRun]) -> str:
     parts: list[str] = []
     for file, frs in by_file.items():
         original = source.read(file)
-        lines, trailing = _split(original)
+        lines, _trailing = _split(original)
         taken: list[tuple[int, int]] = []
         chosen = []
         for fr in frs:
@@ -720,7 +875,7 @@ def _combine(source: RemediationSource, accepted: list[FindingRun]) -> str:
         for fr in sorted(chosen, key=lambda x: x.accepted_region[0], reverse=True):
             s, e, code = fr.accepted_region
             new_lines[s - 1:e] = code.rstrip("\n").split("\n")
-        parts.append(unified_diff(file, 1, "\n".join(lines), "\n".join(new_lines)))
+        parts.append(_line_endings_of(original, unified_diff(file, 1, "\n".join(lines), "\n".join(new_lines))))
     return "".join(parts)
 
 

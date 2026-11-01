@@ -11,9 +11,15 @@ from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
+from routes_cli.remediation.workflow import (
+    ATTEMPT_STEPS,
+    STEPS,
+    FindingRun,
+    RemediationRun,
+    Step,
+)
 from routes_cli.renderers.progress import SPINNER_ASCII, SPINNER_UNICODE
 from routes_cli.renderers.theme import Glyphs, severity_text
-from routes_cli.remediation.workflow import ATTEMPT_STEPS, STEPS, FindingRun, RemediationRun, Step
 
 STEP_LABEL = {"context": "Context", "plan": "Model A plan", "testbench": "Testbench", "baseline": "Baseline",
               "loop": "Correction loop", "verdict": "Verdict"}
@@ -68,7 +74,7 @@ def _attempt_row(a, g: Glyphs, spinner: str) -> str:
     if running is not None and running.detail:
         line += f"\n               [muted]{escape(running.detail[:110])}[/]"
     elif a.outcome == "passed":
-        line += f"\n               [ok]passed every check[/]"
+        line += "\n               [ok]passed every check[/]"
     elif a.failure:
         arrow = "→ feedback to Model B" if a.outcome in ("failed", "rejected") else ""
         line += f"\n               [warn]{escape(a.failure.splitlines()[0][:110])}[/] [muted]{arrow}[/]"
@@ -133,7 +139,7 @@ def _compact(fr: FindingRun, g: Glyphs, index: int, total: int) -> Text:
                             f"[faint]{escape(_loc(fr))}[/]  {tail}")
 
 
-def summary(run: RemediationRun, g: Glyphs, saved=None) -> RenderableType:  # noqa: ANN001
+def summary(run: RemediationRun, g: Glyphs, saved=None) -> RenderableType:
     style, text = RUN_VERDICT.get(run.verdict or "failed", ("muted", run.verdict or ""))
     parts: list[RenderableType] = [Text.from_markup(
         f"[heading]Outcome[/]  [{style}]{escape((run.verdict or '').upper().replace('_', ' '))}[/]  {escape(text)}")]

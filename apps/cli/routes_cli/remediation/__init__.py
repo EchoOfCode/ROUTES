@@ -12,9 +12,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from routes_cli.remediation.llm import ChatClient, LLMSetupError, load_models
-from routes_cli.remediation.source import RemediationSource, RemediationSourceError, resolve
+from routes_cli.remediation.source import (
+    RemediationSource,
+    RemediationSourceError,
+    resolve,
+)
 from routes_cli.remediation.workflow import (
-    DEFAULT_MAX_ATTEMPTS, FindingRun, Listener, RemediationRun, Services, Workflow,
+    DEFAULT_MAX_ATTEMPTS,
+    FindingRun,
+    Listener,
+    RemediationRun,
+    Services,
+    Workflow,
 )
 
 __all__ = ["DEFAULT_MAX_ATTEMPTS", "FindingRun", "Listener", "Prepared", "RemediationError", "RemediationRun",
@@ -25,12 +34,12 @@ class RemediationError(ValueError):
     """The remediation cannot start."""
 
 
-def actionable(assessment) -> list:  # noqa: ANN001
+def actionable(assessment) -> list:
     """Findings that point at code (a line, or a whole file such as next.config): the ones a patch can address."""
     return [f for f in assessment.findings if f.file]
 
 
-def select(assessment, ids: list[str] | None) -> list:  # noqa: ANN001
+def select(assessment, ids: list[str] | None) -> list:
     code = actionable(assessment)
     if not ids:
         return code
@@ -69,7 +78,7 @@ class Prepared:
         self.source.close()
 
 
-def prepare(ctx, assessment, findings: list, *, source: str | None = None,  # noqa: ANN001
+def prepare(ctx, assessment, findings: list, *, source: str | None = None,
             max_attempts: int = DEFAULT_MAX_ATTEMPTS, check_engine: bool = True,
             model_transport=None, engine_factory=None) -> Prepared:
     """Validate everything that can be checked before any model or sandbox call."""
@@ -109,7 +118,7 @@ class Saved:
     patches: dict[int, Path]
 
 
-def save(ctx, run: RemediationRun, *, output: str | None = None) -> Saved:  # noqa: ANN001
+def save(ctx, run: RemediationRun, *, output: str | None = None) -> Saved:
     """Write the run record and every accepted patch under ~/.routes/reports/remediations/<run>/."""
     folder = ctx.home.reports / "remediations" / run.id
     folder.mkdir(parents=True, exist_ok=True)

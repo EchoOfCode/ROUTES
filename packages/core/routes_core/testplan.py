@@ -16,7 +16,7 @@ What the generated tests check (all against the sandboxed copy only):
     which also catches injection whose errors are hidden).
 
 * security, per reflected XSS finding: a unique script marker sent in the traced input must not come
-  back unescaped in the response;
+  back unescaped in an HTML response (a JSON body is not rendered, so it is not a failure);
 * security, per unauthenticated database route (broken access control): an anonymous request must be
   rejected (401/403/404, or a redirect to sign in);
 * security, for missing security headers: the page must send every header the analysis found missing;
@@ -272,7 +272,7 @@ def _class_tests(f: dict, n: int, routes: list[dict], health_path: str) -> tuple
                 return [], f"input kind '{kind}' cannot be placed in a request automatically"
             out.append({"id": _id("xss", n, f"marker{i}"), "category": "security",
                         "name": f'XSS ({where}): markup in {method} {endpoint} {kind} "{name}" comes back escaped',
-                        "request": req, "expect": {"status_not": SERVER_ERRORS, "body_not_contains": [marker]}})
+                        "request": req, "expect": {"status_not": SERVER_ERRORS, "html_not_contains": [marker]}})
         return out, None
 
     if rule == "routes.a01.unprotected-db-route":
