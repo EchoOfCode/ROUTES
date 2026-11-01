@@ -309,7 +309,7 @@ def candidate_hash(code: str) -> str:
 
 def generate_patch(client: ChatClient, plan: FixPlan, snapshot: Snapshot, *,
                    previous_failure: str | None = None, verification: str | None = None,
-                   allowed_modules: set[str] | None = None) -> Candidate:
+                   allowed_modules: set[str] | None = None, hints: str = "") -> Candidate:
     mapping = dict(plan.placeholder_map)
     retry = ""
     if verification:
@@ -321,6 +321,8 @@ def generate_patch(client: ChatClient, plan: FixPlan, snapshot: Snapshot, *,
         checks += f"\nPackages the project already depends on: {', '.join(sorted(allowed_modules)[:60])}."
     if snapshot.start_line == 1:
         checks += "\nThe snapshot starts at the top of the file, so imports may be added there."
+    if hints:
+        checks += "\n" + hints
     if previous_failure:
         failure, failure_map = redact_for_llm(previous_failure)
         mapping.update(failure_map)

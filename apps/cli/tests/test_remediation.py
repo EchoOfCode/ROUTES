@@ -43,7 +43,7 @@ WRONG = HEADER + (
     "}"
 )
 WITH_IMPORT = 'import sqlstring from "sqlstring";\n' + FIXED
-AUTH_FIXED = ('import { pool } from "@/lib/db";\nimport { auth } from "@/auth";\n\n'
+AUTH_FIXED = ('import { pool } from "@/lib/db";\nimport { auth } from "../../../lib/auth";\n\n'
               "export async function GET(req) {\n"
               "  const session = await auth();\n"
               "  if (!session?.user) return new Response('Unauthorized', { status: 401 });\n"
@@ -71,6 +71,8 @@ def app_project(tmp_path, monkeypatch):
     (root / "app/api/search/route.ts").write_text(ROUTE, newline="\n")
     (root / "app/page.tsx").write_text(PAGE, newline="\n")
     (root / "next.config.js").write_text(NEXT_CONFIG, newline="\n")
+    (root / "lib").mkdir()
+    (root / "lib/auth.js").write_text("export async function auth() { return null; }\n", newline="\n")
     (root / "package.json").write_text('{"dependencies": {"next": "15.0.0", "pg": "8.0.0"}}')
     result = json.loads(json.dumps(cf.SOURCE_RESULT))
     sqli = result["findings"][0]
@@ -330,7 +332,9 @@ def test_access_control_fix_is_verified_by_an_anonymous_request(remediation):
     # Importing the project's own auth helper is allowed (not a new dependency), and Model B was told
     # what the sandbox would check.
     assert "an anonymous request must be rejected" in s.prompts_b[0]
-    assert '+import { auth } from "@/auth";' in f["attempts"][0]["patch"]
+    assert '+import { auth } from "../../../lib/auth";' in f["attempts"][0]["patch"]
+    # Model B was told where the project's session helper is and how to import it.
+    assert "import { auth } from '../../../lib/auth'" in s.prompts_b[0]
 
 
 def test_missing_security_headers_fix_is_verified_by_a_header_check(remediation):
@@ -401,3 +405,26 @@ def test_patches_keep_the_files_line_endings(tmp_path):
         apply_unified_diff(root, diff)
         patched = (root / "app/route.js").read_bytes().decode()
         assert "$1" in patched and patched.count("\r\n") == (patched.count("\n") if eol == "\r\n" else 0)
+
+
+def test_imports_that_would_not_resolve_are_rejected_before_the_sandbox(remediation):
+    """A new import must resolve in the project (relative file, defined alias, or a dependency):
+    otherwise it breaks the build, so it is rejected with the exact reason for Model B."""
+    bad_alias = AUTH_FIXED.replace('"../../../lib/auth"', '"@/lib/auth"')
+    rule = "routes.a01.unprotected-db-route"
+    s = remediation(Script(candidates=[bad_alias, AUTH_FIXED], sandbox=["pass"], rescans=["fixed"], fixes=rule))
+    _r, run = _run(s.seq(rule))
+    f = run["findings"][0]
+    assert [a["outcome"] for a in f["attempts"]] == ["rejected", "passed"]
+    assert "defines no '@/' path alias" in f["attempts"][0]["failure"]
+    assert "defines no '@/' path alias" in s.prompts_b[1]          # fed back to the next attempt
+    assert f["resolution"] == "verified_fixed"
+
+
+def test_build_failure_feedback_includes_the_build_output():
+    from routes_core.verification import failure_summary, parse_build_run
+
+    state = {"id": "r", "status": "completed", "result": {
+        "verification": "BUILD_FAILED", "failed_stage": "build", "error": "The production build failed (exit code 1).",
+        "stages": {"build": {"log_tail": "Creating build\nModule not found: Can't resolve 'x'\nBuild failed"}}}}
+    assert "Module not found: Can't resolve 'x'" in failure_summary(parse_build_run(state))
