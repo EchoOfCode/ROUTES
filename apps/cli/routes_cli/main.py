@@ -7,6 +7,7 @@ import json
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -21,7 +22,7 @@ from routes_cli import __version__, actions, doctor as doctor_mod, engine_ctl, r
 from routes_cli.context import Context, initialise
 from routes_cli.renderers import results as R
 from routes_cli.renderers.progress import ProgressModel
-from routes_cli.renderers.theme import glyphs, make_console
+from routes_cli.renderers.theme import glyphs, make_console, severity_text
 from routes_cli.service import AssessmentRunner, PlanError, StepUpdate, set_match
 from routes_cli.stages import STEP_TITLES, label
 
@@ -291,8 +292,8 @@ def _run_assessment(ctx: Context, prepared: actions.Prepared) -> str:
     elif a.source_result is not None:
         con.print()
         con.print(R.findings_table([], g))
-    if interactive() and a.findings:
-        _prompt_next_steps_flow(ctx, a, source=prepared.plan.source.label if prepared.plan.source else None)
+    if a.findings:
+        _offer_remediation(ctx, a)
     return result.status
 
 
@@ -509,8 +510,6 @@ def verify(source: str = typer.Argument(..., help="GitHub repository URL, local 
     ctx = _ctx()
     code, final = _execute_build_and_run(ctx, source, tests=tests, patch=patch, ref=ref, private=private,
                                          approve_script=approve_script, as_json=as_json, output=output)
-    if not as_json and interactive():
-        _prompt_next_after_verify(ctx, source=source)
     raise typer.Exit(code)
 
 
@@ -558,374 +557,227 @@ def findings(id: Optional[str] = typer.Option(None, "--id", help="Show one findi
         con.print(f"\n[muted]Use[/] routes findings --id {items[0].seq:02d} [muted]for details.[/]")
 
 
-def _prompt_next_steps_flow(ctx: Context, a, source: Optional[str] = None) -> None:
-    if not interactive() or not sys.stdin.isatty():
-        return
-    con = _console()
-    code_findings = [f for f in a.findings if f.file and f.line]
-    if not a.findings:
-        return
+# ------------------------------------------------------------- remediation
+def _pick_findings(con, a) -> list | None:
+    """Interactive choice: all code findings, or some of them by number."""
+    from routes_cli.remediation import RemediationError, actionable, select
 
-    con.print()
-    con.print("[heading]─── Select Next Action ──────────────────────────────────────────[/]")
-    if code_findings:
-        con.print("  [accent][1][/] [bold]Remediate all findings with AI loop[/] (Model A + Model B)  [bold cyan][Default][/]")
-        con.print("  [accent][2][/] Remediate a specific finding")
-        con.print("  [accent][3][/] Verify application in disposable Docker sandbox (routes verify)")
-        con.print("  [accent][4][/] Export assessment report (HTML)")
-        con.print("  [accent][0][/] Exit to shell")
-    else:
-        con.print("  [accent][1][/] Verify application in disposable Docker sandbox (routes verify)  [bold cyan][Default][/]")
-        con.print("  [accent][2][/] Export assessment report (HTML)")
-        con.print("  [accent][0][/] Exit to shell")
-
-    try:
-        choice = typer.prompt("Select option", default="1", show_default=False).strip()
-    except Exception:
-        return
-
-    src = source or a.source_label
-    if code_findings:
-        if choice in ("1", ""):
-            _run_remediate_flow(ctx, a, all_findings=True, source=src)
-        elif choice == "2":
-            _run_remediate_single_flow(ctx, a, source=src)
-        elif choice == "3":
-            _run_verify_flow(ctx, a, source=src)
-        elif choice == "4":
-            _run_report_flow(ctx, a)
-    else:
-        if choice in ("1", ""):
-            _run_verify_flow(ctx, a, source=src)
-        elif choice == "2":
-            _run_report_flow(ctx, a)
-
-
-def _run_remediate_flow(ctx: Context, a, all_findings: bool = True, source: Optional[str] = None, rounds: int = 3, output: str = "remediation-all.diff") -> None:
-    from pathlib import Path
-    from rich.table import Table
-    from routes_cli.remediation import remediate_batch_loop
-
-    con = _console()
+    code = actionable(a)
     g = glyphs(con)
-    targets = [f for f in a.findings if f.file and f.line]
-    if not targets:
-        con.print("[warn]No actionable code findings found to remediate.[/]")
-        return
-
-    report = remediate_batch_loop(targets, source_hint=source or a.source_label, max_rounds=rounds, console=con)
-    out_path = Path(output)
-    out_path.write_text(report.combined_patch, encoding="utf-8")
-
-    tbl = Table(title="REMEDIATION BATCH SUMMARY", box=None, header_style="bold cyan")
-    tbl.add_column("ID", style="bold")
-    tbl.add_column("Vulnerability")
-    tbl.add_column("Location")
-    tbl.add_column("Verdict", style="bold")
-    tbl.add_column("Attempts")
-
-    for r in report.results:
-        verdict_text = f"[ok]{g.done} FIXED[/]" if r.status == "fixed" else f"[warn]! REVIEW[/]"
-        tbl.add_row(r.finding_id, r.title, f"{r.file}:{r.line}", verdict_text, f"{r.rounds_used}/{rounds}")
-
-    con.print(tbl)
-    con.print(f"\n[ok]{g.done} Remediation Complete:[/] {report.fixed_count}/{report.total_findings} findings fixed.")
-    con.print(f"[ok]Combined patch written to[/] [path]{out_path.resolve()}[/]")
-
-    if interactive() and sys.stdin.isatty():
-        con.print()
-        con.print("[heading]─── Select Next Action ──────────────────────────────────────────[/]")
-        con.print("  [accent][1][/] [bold]Verify candidate patch in disposable Docker sandbox[/] (routes verify)  [bold cyan][Default][/]")
-        con.print("  [accent][2][/] Export assessment report (HTML)")
-        con.print("  [accent][0][/] Exit to shell")
+    con.print("\n[heading]Findings that can be remediated[/]")
+    for f in code:
+        con.print(f"  [accent]{f.seq:02d}[/]  {severity_text(f.severity, g)}  {escape(f.title)}  "
+                  f"[muted]{escape(f.file or '')}:{f.line}[/]")
+    while True:
         try:
-            choice = typer.prompt("Select option", default="1", show_default=False).strip()
-        except Exception:
-            return
-        if choice in ("1", ""):
-            _run_verify_flow(ctx, a, patch=str(out_path), source=source or a.source_label)
-        elif choice == "2":
-            _run_report_flow(ctx, a)
+            raw = typer.prompt("Remediate which? (Enter = all, e.g. 01,03, 0 = cancel)", default="all",
+                               show_default=False).strip()
+        except (typer.Abort, EOFError):
+            return None
+        if raw in ("0", "q"):
+            return None
+        if raw.lower() in ("", "all", "a"):
+            return code
+        try:
+            return select(a, [raw])
+        except RemediationError as exc:
+            con.print(f"[err]{escape(str(exc))}[/]")
 
 
-def _run_remediate_single_flow(ctx: Context, a, source: Optional[str] = None, rounds: int = 3, output: str = "remediation-patch.diff") -> None:
-    from pathlib import Path
-    from rich.panel import Panel
-    from rich.syntax import Syntax
-    from routes_cli.remediation import remediate_finding_loop
+def _run_remediation(ctx: Context, a, targets: list, *, source: Optional[str] = None, attempts: int = 3,
+                     output: Optional[str] = None, as_json: bool = False, yes: bool = False) -> int:
+    """Drive the staged workflow with a live pipeline view. Returns an exit code."""
+    from routes_cli import remediation as rem
+    from routes_cli.renderers import remediation as RV
 
-    con = _console()
+    con = _console(force_plain=as_json)
+    err = make_console(plain=as_json or not sys.stderr.isatty() or State.no_animation, stderr=True)
     g = glyphs(con)
-    code_findings = [f for f in a.findings if f.file and f.line]
-    if not code_findings:
-        con.print("[warn]No actionable code findings found to remediate.[/]")
-        return
-
-    con.print("\n[heading]Select Finding to Remediate:[/]")
-    for idx, f in enumerate(code_findings, 1):
-        con.print(f"  [accent][{idx}][/] #{f.seq:02d}: {escape(f.type)} in [path]{escape(f.file or '')}:{f.line}[/]")
-
     try:
-        pick = typer.prompt(f"Select finding [1-{len(code_findings)}]", default="1").strip()
-        pick_idx = int(pick) - 1
-        if 0 <= pick_idx < len(code_findings):
-            target = code_findings[pick_idx]
-        else:
-            target = next((f for f in a.findings if pick.lstrip("0") == str(f.seq) or pick == f"{f.seq:02d}"), None)
-    except Exception:
-        target = code_findings[0]
+        prepared = rem.prepare(ctx, a, targets, source=source, max_attempts=attempts)
+    except rem.RemediationError as exc:
+        _fail(str(exc))
+    if not yes:
+        if not interactive():
+            _fail("Remediation sends redacted code to the configured model providers and runs the application in "
+                  "the sandbox. Confirm with --yes when there is no terminal.")
+        err.print(f"\n[heading]AI remediation[/]  [muted]{len(targets)} finding(s) · {escape(prepared.source.label)}[/]")
+        err.print("  [muted]For each finding: Model A plans the fix, ROUTES builds the tests, the original is run in "
+                  "the sandbox (baseline),\n  then up to "
+                  f"{attempts} attempts of Model B patch → validate → build & test → rescan, with the failure fed "
+                  "back each time.\n  The code region sent to the models is redacted first. Your files are not "
+                  "changed.[/]")
+        if not typer.confirm("Start?", default=True):
+            prepared.close()
+            raise typer.Exit(2)
 
-    if not target:
-        con.print("[err]Invalid finding selection.[/]")
-        return
+    live_mode = con.is_terminal and not State.no_animation and not as_json
+    cancel = threading.Event()
+    done = threading.Event()
+    outcome: dict = {}
 
-    con.print(f"\n[heading]AI REMEDIATION ENGINE (ITERATIVE LOOP)[/]  [muted]Finding #{target.seq:02d} · {escape(target.title)}[/]\n")
-    res = remediate_finding_loop(target, source_hint=source or a.source_label, max_rounds=rounds, console=con)
-    out_file = Path(output)
-    out_file.write_text(res.final_patch, encoding="utf-8")
+    class PlainListener(rem.Listener):
+        def log(self, line: str) -> None:
+            if not as_json:
+                err.print(escape(line))
 
-    if res.status == "fixed":
-        con.print(f"\n[ok]{g.done}[/] [bold]Verified Candidate Patch (Unified Diff - Attempt {res.rounds_used}/{rounds}):[/]")
-        con.print(Panel(Syntax(res.final_patch, "diff", theme="monokai", line_numbers=True), title=f"Patch for {escape(res.file)}", expand=False))
-        con.print(f"[ok]{g.done} Patch verification passed:[/] verified strictly against codebase.")
-    else:
-        con.print(f"\n[warn]! Remediation ended with status:[/] [bold]{res.status.upper()}[/]")
-    con.print(f"[ok]Patch written to[/] [path]{out_file.resolve()}[/]")
+    listener = rem.Listener() if live_mode else PlainListener()
+    wf = prepared.workflow(listener=listener, should_cancel=cancel.is_set)
 
-    if interactive() and sys.stdin.isatty():
-        con.print()
-        con.print("[heading]─── Select Next Action ──────────────────────────────────────────[/]")
-        con.print("  [accent][1][/] [bold]Verify candidate patch in disposable Docker sandbox[/] (routes verify)  [bold cyan][Default][/]")
-        con.print("  [accent][2][/] Remediate all remaining findings (automated batch loop)")
-        con.print("  [accent][3][/] Export assessment report (HTML)")
-        con.print("  [accent][0][/] Exit to shell")
+    def work():
         try:
-            choice = typer.prompt("Select option", default="1", show_default=False).strip()
-        except Exception:
+            outcome["run"] = wf.execute()
+        except BaseException as exc:  # noqa: BLE001
+            outcome["error"] = exc
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=work, name="routes-remediation", daemon=True)
+    thread.start()
+    live = Live(console=con, refresh_per_second=12, transient=False) if live_mode else None
+    interrupts = 0
+    try:
+        if live:
+            live.start()
+        frame = 0
+        while not done.is_set():
+            try:
+                if live:
+                    live.update(RV.render(wf.run, g, frame, animate=True))
+                    frame += 1
+                done.wait(1 / 12 if live else 0.5)
+            except KeyboardInterrupt:
+                interrupts += 1
+                if interrupts == 1:
+                    cancel.set()
+                    (live.console if live else err).print(
+                        "[warn]Cancelling: waiting for the sandbox to stop and be removed (Ctrl+C again to leave "
+                        "now).[/]")
+                else:
+                    raise
+        if live:
+            live.update(RV.render(wf.run, g, frame, animate=False, show_all=True))
+    finally:
+        if live:
+            live.stop()
+        prepared.close()
+    if "error" in outcome:
+        raise outcome["error"]
+    run = outcome["run"]
+    saved = rem.save(ctx, run, output=output)
+    if as_json:
+        print(json.dumps({**run.to_dict(), "saved": {"folder": str(saved.folder), "report": str(saved.report),
+                                                      "combined_patch": str(saved.combined) if saved.combined else None}},
+                         indent=2, default=str))
+    else:
+        con.print()
+        con.print(RV.summary(run, g, saved))
+        if output and saved.combined:
+            con.print(f"[muted]Also written to[/] [path]{escape(str(Path(output).resolve()))}[/]")
+        if interactive():
+            _after_remediation(ctx, a, prepared.source, saved)
+        elif saved.combined:
+            con.print(f"\n[muted]Apply it with[/] git apply {escape(str(saved.combined))}")
+    return {"verified_fixed": 0, "partially_remediated": 3, "human_review": 3, "inconclusive": 3,
+            "cancelled": 2}.get(run.verdict, 1)
+
+
+def _after_remediation(ctx: Context, a, source, saved) -> None:
+    from routes_cli import remediation as rem
+
+    con = _console()
+    options = []
+    if saved.combined and source.spec.kind == "directory":
+        options.append(("apply", f"Apply the patch to {source.spec.label}"))
+    options.append(("report", "Write the assessment report (HTML)"))
+    options.append(("exit", "Done"))
+    con.print("\n[heading]Next[/]")
+    for i, (_, text) in enumerate(options, 1):
+        con.print(f"  [accent]{i}[/]  {escape(text)}")
+    try:
+        raw = typer.prompt("Choose", default=str(len(options)), show_default=False).strip()
+        key = options[int(raw) - 1][0]
+    except (typer.Abort, EOFError, ValueError, IndexError):
+        return
+    if key == "apply":
+        if not typer.confirm(f"Modify files in {source.spec.label}?", default=False):
             return
-        if choice in ("1", ""):
-            _run_verify_flow(ctx, a, patch=str(out_file), source=source or a.source_label)
-        elif choice == "2":
-            _run_remediate_flow(ctx, a, all_findings=True, source=source or a.source_label)
-        elif choice == "3":
-            _run_report_flow(ctx, a)
+        try:
+            files = rem.apply_patch(source.spec.path, saved.combined.read_text("utf-8"))
+        except Exception as exc:  # noqa: BLE001 - PatchRejected or OSError: nothing was written
+            con.print(f"[err]Not applied:[/] {escape(str(exc))} (no file was changed)")
+            return
+        con.print(f"[ok]{glyphs(con).done} Applied[/] to {', '.join(escape(f) for f in files)}. Run "
+                  "`routes analyze` again to confirm.")
+    elif key == "report":
+        path = reports.write_report(ctx.home, a, "html")
+        con.print(f"[ok]Report written to[/] [path]{escape(str(path.resolve()))}[/]")
 
 
-def _run_verify_flow(ctx: Context, a, patch: Optional[str] = None, source: Optional[str] = None) -> None:
-    src = source or a.source_label
-    if not src:
-        _console().print("[err]Cannot verify: source repository or folder is unknown.[/]")
+def _offer_remediation(ctx: Context, a) -> None:
+    """After an analysis: continue straight into the remediation workflow."""
+    from routes_cli.remediation import actionable
+
+    if not actionable(a) or not interactive():
         return
     con = _console()
-    con.print(f"\n[heading]Launching Docker Sandbox Verification for {escape(src)}[/]")
     try:
-        code, final = _execute_build_and_run(ctx, source=src, tests="auto", patch=patch)
-    except Exception as exc:
-        con.print(f"[err]Sandbox verification could not run:[/] {exc}")
+        go = typer.confirm(f"\nRemediate {'these findings' if len(actionable(a)) > 1 else 'this finding'} with "
+                           "the AI correction loop now?", default=False)
+    except (typer.Abort, EOFError):
         return
-
-    if interactive() and sys.stdin.isatty():
-        _prompt_next_after_verify(ctx, source=src)
-
-
-def _prompt_next_after_verify(ctx: Context, source: Optional[str] = None) -> None:
-    if not interactive() or not sys.stdin.isatty():
+    if not go:
+        con.print("[muted]Later:[/] routes remediate")
         return
-    con = _console()
-    a = actions.latest(ctx)
-    if not a:
-        return
-    con.print()
-    con.print("[heading]─── Select Next Action ──────────────────────────────────────────[/]")
-    con.print("  [accent][1][/] [bold]Export full assessment report (HTML)[/]  [bold cyan][Default][/]")
-    con.print("  [accent][0][/] Exit to shell")
-    try:
-        choice = typer.prompt("Select option", default="1", show_default=False).strip()
-    except Exception:
-        return
-    if choice in ("1", ""):
-        _run_report_flow(ctx, a)
-
-
-def _run_report_flow(ctx: Context, a, fmt: str = "html") -> None:
-    con = _console()
-    path = reports.write_report(ctx.home, a, fmt)
-    con.print(f"\n[ok]Assessment report written to[/] [path]{path.resolve()}[/]")
+    targets = _pick_findings(con, a)
+    if targets:
+        _run_remediation(ctx, a, targets, yes=True)
 
 
 @app.command()
-def remediate(source: Optional[str] = typer.Argument(None, help="GitHub repository URL or local folder of the application"),
-              id: Optional[str] = typer.Option(None, "--id", "-f", help="Finding sequence number (e.g. 02) to remediate"),
-              all_findings: bool = typer.Option(False, "--all", "-a", help="Run remediation loop over all code findings in the assessment"),
-              rounds: int = typer.Option(3, "--rounds", "-r", help="Maximum correction attempts per finding (default: 3)"),
-              assessment: Optional[str] = typer.Option(None, "--assessment", help="Assessment ID (prefix)"),
+def remediate(ids: Optional[list[str]] = typer.Argument(None, help="Finding numbers, e.g. 01 03 (default: choose "
+                                                                     "interactively, or all with --all)"),
+              all_findings: bool = typer.Option(False, "--all", help="Every code finding of the assessment"),
+              attempts: int = typer.Option(3, "--attempts", "-n", help="Patch attempts per finding (1-10)"),
+              source: Optional[str] = typer.Option(None, "--source", "-s",
+                                                   help="Folder, .zip or GitHub URL of the code (default: the "
+                                                        "assessment's source)"),
+              assessment: Optional[str] = typer.Option(None, "--assessment", "-a", help="Assessment ID (prefix)"),
               project: Optional[str] = typer.Option(None, "--project", "-p"),
-              output: str = typer.Option("remediation-patch.diff", "--output", "-o", help="File to write generated patch diff"),
-              as_json: bool = typer.Option(False, "--json", help="Print result as JSON")):
-    """Remediate security findings using the dual-LLM iterative correction loop."""
-    from pathlib import Path
-    from rich.panel import Panel
-    from rich.syntax import Syntax
-    from rich.table import Table
-    from routes_cli.remediation import remediate_batch_loop, remediate_finding_loop
+              output: Optional[str] = typer.Option(None, "--output", "-o",
+                                                   help="Also write the combined patch to this file"),
+              yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for confirmation"),
+              as_json: bool = typer.Option(False, "--json", help="Print the full run record as JSON")):
+    """Fix findings with the verified AI correction loop.
+
+    Per finding: context → Model A plan → testbench → baseline on the original
+    (sandbox) → up to N attempts of Model B patch → validate → build & test →
+    rescan, with each failure fed back → evidence-based verdict. Your files
+    are never modified unless you choose to apply the patch.
+    Exit codes: 0 all verified fixed, 3 not all verified, 2 cancelled, 1 error.
+    """
+    from routes_cli.remediation import RemediationError, select
 
     ctx = _ctx()
-    con = _console()
-    g = glyphs(con)
-
     try:
         a = actions.latest(ctx, assessment=assessment, project=project)
     except PlanError as exc:
         _fail(str(exc))
     if a is None or not a.findings:
-        _fail("No security findings to remediate. Run `routes analyze <source>` first.")
-
-    # Interactive choice if neither --all nor --id is given
-    target = None
-    if not all_findings and not id:
-        if interactive() and sys.stdin.isatty():
-            con.print("\n[heading]─── Select Remediation Option ─────────────────────────────────[/]")
-            con.print("  [accent][1][/] [bold]Remediate all findings in automated AI loop[/] (Model A + Model B)  [bold cyan][Default][/]")
-            con.print("  [accent][2][/] Select a specific finding to remediate")
-            con.print("  [accent][0][/] Cancel")
-            try:
-                opt = typer.prompt("Select option", default="1", show_default=False).strip()
-            except Exception:
-                return
-            if opt in ("1", ""):
-                all_findings = True
-            elif opt == "2":
-                code_findings = [f for f in a.findings if f.file and f.line]
-                con.print("\n[heading]Code Findings Available for Remediation:[/]")
-                for idx, f in enumerate(code_findings, 1):
-                    con.print(f"  [accent][{idx}][/] #{f.seq:02d}: {escape(f.type)} in [path]{escape(f.file or '')}:{f.line}[/]")
-                try:
-                    pick = typer.prompt(f"Select finding [1-{len(code_findings)}]", default="1").strip()
-                    pick_idx = int(pick) - 1
-                    if 0 <= pick_idx < len(code_findings):
-                        target = code_findings[pick_idx]
-                    else:
-                        target = next((f for f in a.findings if pick.lstrip("0") == str(f.seq) or pick == f"{f.seq:02d}"), None)
-                except Exception:
-                    target = code_findings[0]
-                if not target:
-                    _fail("Invalid finding selection.")
-            else:
-                return
-        else:
-            all_findings = True
-
-    # Multi-finding loop mode
-    if all_findings:
-        targets = [f for f in a.findings if f.file and f.line]
-        if not targets:
-            _fail("No actionable code findings found in this assessment.")
-
-        report = remediate_batch_loop(targets, source_hint=source, max_rounds=rounds, console=con)
-        out_path = Path("remediation-all.diff" if output == "remediation-patch.diff" else output)
-        out_path.write_text(report.combined_patch, encoding="utf-8")
-
-        if as_json:
-            print(json.dumps({
-                "total": report.total_findings,
-                "fixed": report.fixed_count,
-                "human_review": report.human_review_count,
-                "combined_patch_file": str(out_path.resolve()),
-                "results": [r.__dict__ for r in report.results]
-            }, indent=2))
-            return
-
-        # Summary Table
-        tbl = Table(title="REMEDIATION BATCH SUMMARY", box=None, header_style="bold cyan")
-        tbl.add_column("ID", style="bold")
-        tbl.add_column("Vulnerability")
-        tbl.add_column("Location")
-        tbl.add_column("Verdict", style="bold")
-        tbl.add_column("Attempts")
-
-        for r in report.results:
-            verdict_text = f"[ok]{g.done} FIXED[/]" if r.status == "fixed" else f"[warn]! REVIEW[/]"
-            tbl.add_row(r.finding_id, r.title, f"{r.file}:{r.line}", verdict_text, f"{r.rounds_used}/{rounds}")
-
-        con.print(tbl)
-        con.print(f"\n[ok]{g.done} Remediation Complete:[/] {report.fixed_count}/{report.total_findings} findings fixed.")
-        con.print(f"[ok]Combined patch written to[/] [path]{out_path.resolve()}[/]")
-        con.print(f"\n[accent]Next:[/] verify in disposable Docker sandbox:\n  [bold]routes verify {source or a.source_label or '.'} --tests auto --patch {out_path.name}[/]")
-
-        if interactive() and sys.stdin.isatty():
-            con.print()
-            con.print("[heading]─── Select Next Action ──────────────────────────────────────────[/]")
-            con.print("  [accent][1][/] [bold]Verify candidate patch in disposable Docker sandbox[/] (routes verify)  [bold cyan][Default][/]")
-            con.print("  [accent][2][/] Export assessment report (HTML)")
-            con.print("  [accent][0][/] Exit to shell")
-            try:
-                choice = typer.prompt("Select option", default="1", show_default=False).strip()
-            except Exception:
-                return
-            if choice in ("1", ""):
-                _run_verify_flow(ctx, a, patch=str(out_path), source=source or a.source_label)
-            elif choice == "2":
-                _run_report_flow(ctx, a)
-        return
-
-    # Single finding loop mode
-    if id:
-        target = next((f for f in a.findings if id.lstrip("0") == str(f.seq) or id == f"{f.seq:02d}"), None)
-        if target is None:
-            _fail(f"No finding {id} in assessment {a.id[:8]}.")
-    elif target is None:
-        target = next((f for f in a.findings if f.file and f.line), a.findings[0])
-
-    con.print(f"[heading]AI REMEDIATION ENGINE (ITERATIVE LOOP)[/]  [muted]Finding #{target.seq:02d} · {escape(target.title)}[/]\n")
-    con.print(f"  Target:       [path]{escape(target.file or '')}:{target.line}[/]")
-    con.print(f"  Rule:         [accent]{escape(target.rule_id)}[/]")
-    con.print(f"  Severity:     {escape(target.severity.upper())}")
-    con.print(f"  Max Attempts: {rounds}\n")
-
+        _fail("No findings to remediate. Run `routes analyze <source>` first.")
     try:
-        res = remediate_finding_loop(target, source_hint=source, max_rounds=rounds, console=con)
-    except Exception as exc:
-        _fail(f"Remediation failed: {exc}")
-
-    out_file = Path(output)
-    out_file.write_text(res.final_patch, encoding="utf-8")
-
-    if as_json:
-        print(json.dumps(res.__dict__, indent=2))
-        return
-
-    con.print(f"\n[ok]{g.done}[/] [bold]Model A Root-Cause Analysis:[/]\n  {escape(res.model_a_analysis)}")
-    con.print(f"\n[ok]{g.done}[/] [bold]Model A Strategy:[/]\n  {escape(res.model_a_strategy)}")
-
-    if res.status == "fixed":
-        con.print(f"\n[ok]{g.done}[/] [bold]Verified Candidate Patch (Unified Diff - Attempt {res.rounds_used}/{rounds}):[/]")
-        con.print(Panel(Syntax(res.final_patch, "diff", theme="monokai", line_numbers=True), title=f"Patch for {escape(res.file)}", expand=False))
-        con.print(f"[ok]{g.done} Patch verification passed:[/] verified strictly against codebase.")
-    else:
-        con.print(f"\n[warn]! Remediation ended with status:[/] [bold]{res.status.upper()}[/]")
-        if res.error:
-            con.print(f"  Reason: {escape(res.error)}")
-
-    con.print(f"\n[ok]Patch written to[/] [path]{out_file.resolve()}[/]")
-    con.print(f"\n[accent]Next:[/] verify in disposable Docker sandbox:\n  [bold]routes verify {source or a.source_label or '.'} --tests auto --patch {output}[/]")
-
-    if interactive() and sys.stdin.isatty():
-        con.print()
-        con.print("[heading]─── Select Next Action ──────────────────────────────────────────[/]")
-        con.print("  [accent][1][/] [bold]Verify candidate patch in disposable Docker sandbox[/] (routes verify)  [bold cyan][Default][/]")
-        con.print("  [accent][2][/] Remediate all remaining findings (automated batch loop)")
-        con.print("  [accent][3][/] Export assessment report (HTML)")
-        con.print("  [accent][0][/] Exit to shell")
-        try:
-            choice = typer.prompt("Select option", default="1", show_default=False).strip()
-        except Exception:
-            return
-        if choice in ("1", ""):
-            _run_verify_flow(ctx, a, patch=str(out_file), source=source or a.source_label)
-        elif choice == "2":
-            _run_remediate_flow(ctx, a, all_findings=True, source=source or a.source_label)
-        elif choice == "3":
-            _run_report_flow(ctx, a)
+        if ids or all_findings:
+            targets = select(a, ids if ids and not all_findings else None)
+        elif interactive() and not as_json:
+            targets = _pick_findings(_console(), a)
+            if not targets:
+                raise typer.Exit(2)
+        else:
+            _fail("Give finding numbers or --all.")
+    except RemediationError as exc:
+        _fail(str(exc))
+    raise typer.Exit(_run_remediation(ctx, a, targets, source=source, attempts=attempts, output=output,
+                                      as_json=as_json, yes=yes))
 
 
 @app.command()

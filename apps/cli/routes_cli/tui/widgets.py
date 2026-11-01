@@ -294,3 +294,35 @@ class BuildRunPanel(Static):
         elapsed = (self.ended or self._clock()) - self.started
         self.update(progress(self.state, self.g, frame=self.frame, animate=self.animate_spin and self.ended is None,
                              local=self.local, elapsed=elapsed, source=self.source))
+
+
+class RemediationPanel(Static):
+    """Live remediation pipeline: the current stage, every attempt of the correction loop."""
+
+    def __init__(self, g: Glyphs, *, animate: bool, **kw):
+        super().__init__("", **kw)
+        self.g = g
+        self.animate_spin = animate
+        self.run = None
+        self.frame = 0
+
+    def on_mount(self) -> None:
+        self.set_interval(1 / 12 if self.animate_spin else 1.0, self._tick)
+        self.redraw()
+
+    def _tick(self) -> None:
+        self.frame += 1
+        self.redraw()
+
+    def set_run(self, run) -> None:
+        self.run = run
+        self.redraw()
+
+    def redraw(self) -> None:
+        from routes_cli.renderers.remediation import render
+
+        if self.run is None:
+            self.update(Text("Preparing…", style="#8a8f98"))
+            return
+        self.update(render(self.run, self.g, self.frame, animate=self.animate_spin and self.run.active,
+                           show_all=not self.run.active))

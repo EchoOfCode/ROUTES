@@ -72,7 +72,7 @@ async def test_startup_home_menu_and_prompt(engine):
         assert app.query_one("#menu").index == 0 and app.focused is app.query_one("#menu")
         assert await wait_for(pilot, lambda: all(v is not None for v in app.query_one("#readiness").items.values()))
         assert app.query_one("#readiness").items["Engine"][0] == "ok"
-        await pilot.press("down", "down", "down", "enter")  # "View latest findings"
+        await pilot.press("down", "down", "enter")  # "View latest findings"
         await pilot.pause(0.2)
         assert app.view_name == "results"
         await pilot.press("escape")

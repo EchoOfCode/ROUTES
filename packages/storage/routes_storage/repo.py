@@ -170,6 +170,13 @@ def save_source(db: Session, assessment: Assessment, records: SourceRecords) -> 
         # The CLI never stores source code: the remediation snapshot and line
         # range are web-stack-only fields.
         kept = {k: v for k, v in f.items() if k not in ("snapshot", "end_line")}
+        # Only the snapshot's line range is kept (no code): the remediation
+        # workflow re-reads exactly that region from the pinned source.
+        snap = f.get("snapshot") or {}
+        if isinstance(snap.get("start_line"), int) and isinstance(snap.get("end_line"), int):
+            kept["technical_details"] = {**(kept.get("technical_details") or {}),
+                                         "remediation_region": {"start_line": snap["start_line"],
+                                                                "end_line": snap["end_line"]}}
         db.add(Finding(assessment_id=assessment.id, seq=i, **kept))
     for t in records.technologies:
         db.add(Technology(assessment_id=assessment.id, **t))

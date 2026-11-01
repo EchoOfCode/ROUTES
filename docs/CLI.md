@@ -51,6 +51,7 @@ The prompt at the bottom is always available. Commands may be typed with or with
 | `/scan <url> [--source <repo/folder/zip>] [--project <name>]` | Website discovery, optionally with source analysis |
 | `/analyze <github-url/folder/zip> [--url <site>] [--ref <branch>] [--private]` | Static source analysis |
 | `/verify <github-url/folder/zip> --tests <plan.json> [--patch <fix.diff>] [--ref <branch>] [--approve <pkg,...>] [--private]` | Build, run and test the app in a disposable sandbox ([BUILD_RUN.md](BUILD_RUN.md)). Asks for confirmation first, shows each phase live as the engine enters it, Ctrl+C cancels, and the full result is saved under `~/.routes/reports/build-runs/` |
+| `/remediate [id ...] [--all] [--attempts 3] [--source <folder/zip/github-url>]` | Verified AI fix loop for code findings (see [AI remediation](#ai-remediation)). With no ids, every code finding. Asks for confirmation, shows the pipeline live, Ctrl+C cancels |
 | `/findings [id] [--severity high]` | Findings table with a detail pane |
 | `/history [project]` | Previous assessments |
 | `/report [markdown/html/json]` | Write a report of the latest assessment |
@@ -113,6 +114,8 @@ routes testplan ./my-app -o plan.json                   # generate a test plan f
 routes verify ./my-app --tests plan.json [--patch fix.diff] [--json] [-o result.json]
 routes verify ./my-app --tests auto                     # generate the plan on the fly
                                                         # build, run and test in a disposable sandbox (docs/BUILD_RUN.md)
+routes remediate 01 03 [--attempts 3] [--source ./my-app] [-o fix.diff] [--yes] [--json]
+routes remediate --all --yes                            # every code finding of the latest assessment
 routes doctor [--quick] [--json]
 routes engine up | status | stop
 routes --version
@@ -127,6 +130,56 @@ routes --version
 | 4 | `verify` only: dynamic verification unsupported for this project |
 
 When output is not a terminal (a pipe or a file), or with `--no-animation`, the commands print plain lines without colours or live rendering.
+
+## AI remediation
+
+`routes remediate` (and `/remediate`) runs the remediation workflow of
+[REMEDIATION_VERIFICATION.md](REMEDIATION_VERIFICATION.md) locally, one finding at a time, through the stages
+of `routes_shared.remediation_workflow`. The live view shows the current stage and every attempt:
+
+```
+1/2  #01 User input used to build a SQL query  ▲ HIGH  app/api/search/route.ts:6  building the patched copy
+✓  Context          app/api/search/route.ts lines 3-8
+✓  Model A plan     q is interpolated into SQL.
+✓  Testbench        2 security, 4 functional, 1 health
+✓  Baseline         vulnerability REPRODUCED: 2/2 security test(s) fail on the original
+⠸  Correction loop  attempt 2 of 3
+       Attempt 1  ✓ Model B  ✓ validate  ✗ build+test  – rescan
+                  [security] SQL injection quote probe: failed; status 500 … → feedback to Model B
+       Attempt 2  ✓ Model B  ✓ validate  ⠸ build+test  ○ rescan
+                  Production build (no network)
+○  Verdict
+```
+
+1. **Context.** The exact function the analyzer recorded (line range only; the CLI stores no code), read
+   from the folder, the ZIP, or GitHub at the analysed commit. Older assessments use a ±15-line window
+   (shown as a warning; re-run the analysis for exact bounds).
+2. **Model A plan.** The region is redacted (`redact_for_llm`) and re-checked before it is sent.
+3. **Testbench.** Security tests come from ROUTES (`routes_core.testplan`), never from a model. Model A may
+   add GET/HEAD functional tests.
+4. **Baseline.** The original is built and tested in the sandbox. The vulnerability must be reproduced (a
+   security test fails). Functional tests that fail on the original are dropped.
+5. **Correction loop**, up to `--attempts` (default 3). Each attempt runs Model B → validation (it changes
+   the code, adds no imports or network calls, the file still parses, the diff is valid) → build & test of
+   the patched copy → full static rescan. A failed check sends its sanitised evidence back to Model B. The
+   same candidate twice in a row stops the loop (oscillation).
+6. **Verdict** (`decide_finding`). `verified_fixed` requires all of: a reproduced baseline, a passing
+   sandbox run, and a rescan where the finding is gone and nothing new appears. If the app cannot be built
+   in the sandbox, or ROUTES has no runtime test for the finding type, the loop still runs with the rescan
+   as its check, but the verdict is at most `inconclusive`.
+
+With several findings, the accepted patches are combined and checked together (one build and test run, one
+rescan).
+
+Results go to `~/.routes/reports/remediations/<run>/`: `run.json` (every stage, attempt and piece of
+evidence), `finding-NN.diff` and `combined.diff`. Your files are changed only if you choose *Apply* at the
+end (folder sources only; strict and all-or-nothing). Otherwise use `git apply`.
+
+Models are configured like the worker's: `LLM_A_API_KEY`, `LLM_B_API_KEY` (or `GROQ_API_KEY`), and optionally
+`LLM_A_ENDPOINT`/`LLM_A_MODEL` and the B equivalents. They are read from the environment,
+`~/.routes/remediation.env`, or a `.env` in the current folder or a parent. The engine must be running.
+
+Exit codes: 0 every finding verified fixed · 3 not all verified · 2 cancelled · 1 error.
 
 ## Storage
 

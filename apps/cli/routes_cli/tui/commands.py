@@ -29,9 +29,10 @@ COMMANDS: tuple[Spec, ...] = (
                    "[--approve <pkg,...>] [--private]",
          "Build, run and test an app in a disposable sandbox (patch applied to a copy only)",
          ("--tests", "--patch", "--ref", "--approve"), ("--private",)),
-    Spec("remediate", "/remediate [id] [--all] [--rounds 3] [--output <patch.diff>]",
-         "AI-powered iterative remediation loop (dual-LLM: Model A + Model B)",
-         ("--id", "--rounds", "--output"), ("--all",)),
+    Spec("remediate", "/remediate [id ...] [--all] [--attempts 3] [--source <folder|zip|github-url>] "
+                      "[--output <patch.diff>]",
+         "Verified AI fix loop: Model A plan, baseline, Model B patch, build & test, rescan, retry",
+         ("--attempts", "--source", "--output", "--assessment"), ("--all",)),
     Spec("findings", "/findings [id] [--severity high]", "Findings of the latest assessment", ("--severity",)),
     Spec("history", "/history [project]", "Previous assessments (5 kept per project)"),
     Spec("report", "/report [markdown|html|json]", "Write a report of the latest assessment"),
