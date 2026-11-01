@@ -41,14 +41,19 @@ class Settings(BaseSettings):
 
     # "live": always call out. "record": call out and save the response.
     # "replay": never call out, read from the cache, error clearly on a miss.
+    # The gateway's model-egress route (http://routes:<token>@network-gateway:3128).
+    # worker-remediate sits on an internal network where this is the only exit.
+    llm_proxy_url: str = Field(default="", alias="LLM_PROXY_URL")
     llm_cache_mode: str = Field(default="live", alias="LLM_CACHE_MODE")
     llm_cache_dir: str = Field(default="/tmp/llm_cache", alias="LLM_CACHE_DIR")
 
-    # "fake": FakeSandboxRunner (canned results, no real execution). "real":
-    # RealSandboxRunner (HTTP to sandbox_manager) - not yet functional until
-    # sandbox_manager's owner adds a matching run kind. Switching is this one
-    # flag, never a code change.
-    sandbox_runner_kind: str = Field(default="fake", alias="SANDBOX_RUNNER_KIND")
+    # "build_run": real verification in the Build & Run sandbox (the engine
+    # behind `routes verify`): baseline, candidate builds and rescans.
+    # "fake": FakeSandboxRunner (canned results); recorded as simulated
+    # evidence, which can never verify a fix. "real" is an alias of build_run.
+    sandbox_runner_kind: str = Field(default="build_run", alias="SANDBOX_RUNNER_KIND")
+    # Scratch space for the Build & Run verifier client (worker-remediate only).
+    verify_cache_dir: str = Field(default="/tmp/routes-verify", alias="VERIFY_CACHE_DIR")
 
     batch_size: int = Field(default=8, alias="BATCH_SIZE")
     llm_concurrency: int = Field(default=4, alias="LLM_CONCURRENCY")

@@ -112,7 +112,8 @@ def source_records(result: SourceResult) -> SourceRecords:
             endpoints.append({"method": method[:16], "url": r["path"], "path": r["path"], "origin": "source_route",
                               "parameters": [], "details": {"file": r["file"], "line": r["line"], "router": r["router"]},
                               "evidence": f"Route handler in {r['file']}"[:500], "page_url": None})
-    summary = {"source_framework": profile["framework"], "source_support": result.support_status}
+    summary = {"source_framework": profile["framework"], "source_support": result.support_status,
+               "source_commit": result.source_commit}
     return SourceRecords(analysis, findings, technologies, endpoints, summary, clean["match_evidence"])
 
 

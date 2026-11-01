@@ -25,7 +25,9 @@ class GithubImport:
 class Session:
     id: str
     token: str
-    mode: Literal["web", "github_import", "packages"]
+    # models: the remediation worker's route to its model providers (fixed
+    # allowlist, HTTPS CONNECT only), configured at gateway start.
+    mode: Literal["web", "github_import", "packages", "models"]
     allowed_hosts: frozenset[str]
     allowed_ports: frozenset[int]
     subnet: ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -69,8 +71,8 @@ class SessionStore:
         self._by_token: dict[str, Session] = {}
         self._by_id: dict[str, Session] = {}
 
-    def create(self, **kwargs) -> Session:
-        token = secrets.token_urlsafe(32)
+    def create(self, *, token: str | None = None, **kwargs) -> Session:
+        token = token or secrets.token_urlsafe(32)
         sid = hashlib.sha256(token.encode()).hexdigest()[:24]
         session = Session(id=sid, token=token, **kwargs)
         self._by_token[token] = session

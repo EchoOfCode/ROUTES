@@ -371,3 +371,26 @@ def test_api_validates_build_run_requests(tmp_path):
         assert c.post("/runs", json=base).status_code == 403
         ok = c.post("/runs", json=base, headers=auth)
         assert ok.status_code == 201 and ok.json()["kind"] == "build_run" and ok.json()["phase"] in ("CREATED", None)
+
+
+def test_cleanup_outcome_is_recorded_and_failures_are_not_silent(tmp_path):
+    docker, gw = ScriptedDocker(), FakeGateway()
+    m = RunManager(settings(tmp_path), docker, gw, CredentialStore())
+    run = asyncio.run(_go(m, spec(tmp_path)))
+    assert run.cleanup["status"] == "complete" and run.cleanup["containers_removed"] == 3
+    assert run.public()["cleanup"] == run.cleanup
+
+    docker, gw = ScriptedDocker(), FakeGateway()
+    orig = docker.remove_network
+
+    async def stuck(name):
+        if name.endswith("-testnet"):
+            raise RuntimeError("network has active endpoints")
+        return await orig(name)
+
+    docker.remove_network = stuck
+    m = RunManager(settings(tmp_path), docker, gw, CredentialStore())
+    run = asyncio.run(_go(m, spec(tmp_path)))
+    assert run.cleanup["status"] == "incomplete"
+    assert any("-testnet" in e for e in run.cleanup["errors"])
+    assert any(a["action"] == "cleanup_failed" for a in run.audit)

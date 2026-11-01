@@ -13,6 +13,8 @@ import sys
 import time
 from pathlib import Path
 
+from routes_shared.buildrun import PatchRejected
+from routes_shared.patching import apply_unified_diff
 from routes_shared.redaction import redact_structure, redact_text
 
 from source_analyzer.acquisition.archive import ArchiveError, extract_tar_gz, extract_zip
@@ -28,7 +30,10 @@ from source_analyzer.vuln_classes.base import snapshot_for
 WORK = Path(os.environ.get("ROUTES_WORK_DIR", "/work"))
 
 
-def acquire(kind: str, work: Path) -> tuple[Path, list[str]]:
+PATCH_FILE = Path("/input/patch.diff")
+
+
+def acquire(kind: str, work: Path) -> tuple[Path, list[str], str | None, bool]:
     src = work / "src"
     src.mkdir(parents=True, exist_ok=True)
     emit("retrieving_source", "Retrieving source code")
@@ -57,7 +62,17 @@ def acquire(kind: str, work: Path) -> tuple[Path, list[str]]:
     if report.files_written == 0:
         raise ArchiveError("The archive did not contain any analysable files.")
     emit("extracting", f"{report.files_written} files extracted", files=report.files_written)
-    return src, notes
+    patched = False
+    if PATCH_FILE.is_file():
+        # Post-remediation rescan: apply the candidate patch to this temporary
+        # copy, strictly (no fuzz), before analysing it.
+        try:
+            changed = apply_unified_diff(src, PATCH_FILE.read_text("utf-8"))
+        except (PatchRejected, UnicodeDecodeError) as exc:
+            raise ArchiveError(f"The candidate patch could not be applied: {exc}") from exc
+        patched = True
+        emit("extracting", f"Candidate patch applied to {len(changed)} file(s)")
+    return src, notes, report.commit_sha, patched
 
 
 # Rules whose finding *is* a committed secret value: the fix is rotating the
@@ -184,9 +199,11 @@ def main() -> int:
     target_host = os.environ.get("ROUTES_TARGET_HOST", "")
     started = time.monotonic()
     try:
-        root, notes = acquire(kind, WORK)
+        root, notes, commit, patched = acquire(kind, WORK)
         result = analyse(root, kind, target_host)
         result["warnings"] = notes + result["warnings"]
+        result["source_commit"] = commit
+        result["patch_applied"] = patched
         result["duration_seconds"] = round(time.monotonic() - started, 1)
         # Defence in depth: nothing leaving the sandbox may contain a secret value.
         result = redact_structure(result, max_length=2000)

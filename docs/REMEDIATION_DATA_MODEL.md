@@ -293,18 +293,18 @@ real fix.
 
 ## Known limitations and deferred work
 
-- **No real remediation sandbox yet.** `SANDBOX_RUNNER_KIND=real` posts a `remediate_verify` run kind that
-  the Sandbox Manager does not implement. Every real run therefore records an `error` verification
-  (infrastructure) and ends `inconclusive`. The default `fake` runner is `simulated` evidence and can never
-  produce `verified_fixed`. Wiring the build-and-run executor (`docs/BUILD_RUN.md`) in as this runner is
-  the next step. The `building` stage and the build/startup/database status columns exist for it.
-- **No commit SHA.** The analyzer fetches the repository by ref and records no commit SHA, so
-  `source_commit_sha` is NULL. `source_ref` holds the branch or ref.
-- **No ZIP-sourced rescans.** ZIP-sourced projects cannot be rescanned (no stable upload is kept), so they
-  end `inconclusive`.
-- **Plans store only what Model A returns.** Model A returns only `prompt_for_fix` and the testbench, so
-  plans store the strategy; the other plan fields stay NULL. Asking Model A for more would change the
-  prompt and invalidate recorded replay caches.
+- **Real verification** now runs in the Build & Run engine (`SANDBOX_RUNNER_KIND=build_run`); see
+  [REMEDIATION_VERIFICATION.md](REMEDIATION_VERIFICATION.md). The `fake` runner remains `simulated`
+  evidence and can never produce `verified_fixed`.
+- **Commit SHA** is now recorded for GitHub assessments (from the archive's pax header) and pins every
+  verification. Assessments made before this change have none, so their runs end `inconclusive` until the
+  assessment is re-run.
+- **No ZIP-sourced rescans in the web stack.** The web stack does not retain the uploaded ZIP, so
+  ZIP-sourced projects end `inconclusive`. A retained archive verified by SHA-256 is supported by the
+  runner (used by the CLI-side end-to-end test).
+- **Plans in build-run mode** store the structured fields Model A returns: root cause, expected
+  behaviour, regression risks and required context. Fields it does not return stay NULL. The legacy JS
+  testbench mode is unchanged, so its replay caches stay valid.
 - **Patches are derived diffs.** Model B returns bounded replacement code for the snapshot region (the
   branch's design, validated by `validate_fix`). ROUTES derives the unified diff from it, then validates
   and stores that diff. Model B never supplies a diff or a command.
@@ -316,6 +316,5 @@ real fix.
 - **Worker tests are not in CI.** `services/worker/tests` are not run by the CI workflow; their conftest
   expects the container layout (`/srv/api`).
 - **The CLI has no remediation commands.** The CLI's SQLite store has none and is unchanged.
-- **`worker-remediate` has direct internet access.** It sits on the `egress` network to reach the model
-  APIs, rather than going through the network gateway. That is the branch's existing design, unchanged
-  here, and should be reviewed.
+- **`worker-remediate` no longer has direct internet access.** Its only exit is the gateway's fixed
+  `models` route: HTTPS to `MODEL_EGRESS_HOSTS` only, and no route at all without `MODEL_EGRESS_TOKEN`.

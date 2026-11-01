@@ -41,6 +41,8 @@ class Run:
     error: str | None = None
     exit_code: int | None = None
     network_summary: dict | None = None
+    # build_run: what cleanup removed and what it could not (never silent).
+    cleanup: dict | None = None
     created_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     cancel: asyncio.Event = field(default_factory=asyncio.Event)
@@ -58,7 +60,8 @@ class Run:
             "network_summary": self.network_summary, "created_at": self.created_at, "finished_at": self.finished_at,
         }
         if self.kind == "build_run":
-            data.update(phase=self.phase, phase_history=self.phase_history, audit=self.audit[-300:], owner=self.owner)
+            data.update(phase=self.phase, phase_history=self.phase_history, audit=self.audit[-300:], owner=self.owner,
+                        cleanup=self.cleanup)
         return data
 
 
@@ -119,6 +122,13 @@ class RunManager:
         session_id: str | None = None
         upload_id = spec.get("upload_id")
         secret: str | None = None
+        if run.kind == "source" and spec.get("patch"):
+            # The patch travels like an upload: a private directory mounted
+            # read-only at /input, removed with the run.
+            upload_id = upload_id or str(uuid.uuid4())
+            input_dir = Path(self.settings.uploads_dir) / upload_id
+            input_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            (input_dir / "patch.diff").write_text(spec["patch"], "utf-8")
         try:
             async with self._slots:
                 if run.cancel.is_set():

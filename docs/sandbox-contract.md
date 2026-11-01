@@ -1,5 +1,12 @@
 # Sandbox contract (for the sandbox's owner)
 
+> **Update:** the real implementation is now `BuildRunSandboxRunner`
+> (`services/worker/sandbox/buildrun.py`, `SANDBOX_RUNNER_KIND=build_run`). It uses the existing
+> Build & Run engine (`build_run` run kind) and declarative test plans, not a `remediate_verify` run
+> kind; see [REMEDIATION_VERIFICATION.md](REMEDIATION_VERIFICATION.md). The interface below still
+> applies; requests now also carry `patch` (a unified diff), and results carry `evidence` and
+> `rescan_findings`.
+
 The remediation loop needs to run a testbench against a patched (or
 original) code tree and get back which assertions passed. The loop itself
 depends only on the `SandboxRunner` interface below

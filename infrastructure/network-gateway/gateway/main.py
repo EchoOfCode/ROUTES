@@ -61,6 +61,31 @@ def control_peers() -> list[ipaddress.IPv4Network]:
     return nets
 
 
+MODEL_SESSION_BYTES = 50 * 1024 ** 3   # generous: prompts and replies only
+
+
+def model_session(store: SessionStore, env=os.environ):
+    """The remediation worker's only route to the internet: a fixed session
+    bound to the internal model-egress network, HTTPS CONNECT on 443 to the
+    configured provider hosts only. Not configured -> no route (fail closed)."""
+    from routes_shared.netpolicy import normalise_hostname
+
+    token = env.get("MODEL_EGRESS_TOKEN", "").strip()
+    subnet = env.get("MODEL_EGRESS_SUBNET", "").strip()
+    hosts = [h.strip() for h in env.get("MODEL_EGRESS_HOSTS", "").split(",") if h.strip()]
+    if not (token and subnet and hosts):
+        log.info("model egress not configured: the remediation worker has no outbound route")
+        return None
+    if len(token) < 24:
+        raise SystemExit("MODEL_EGRESS_TOKEN must be 24+ characters")
+    allowed = frozenset(normalise_hostname(h) for h in hosts)
+    session = store.create(token=token, mode="models", allowed_hosts=allowed, allowed_ports=frozenset({443}),
+                           subnet=ipaddress.ip_network(subnet, strict=False), expires_at=float("inf"),
+                           max_bytes=MODEL_SESSION_BYTES)
+    log.info("model egress: %s -> %s (HTTPS only)", subnet, ", ".join(sorted(allowed)))
+    return session
+
+
 async def main() -> None:
     token = os.environ.get("GATEWAY_CONTROL_TOKEN", "")
     if len(token) < 24:
@@ -69,6 +94,7 @@ async def main() -> None:
     if dev_hosts:
         log.warning("DEVELOPMENT ALLOWLIST ACTIVE: private addresses permitted for %s", ", ".join(sorted(dev_hosts)))
     store = SessionStore()
+    model_session(store)
     peers = control_peers()
     log.info("control API peers: %s", ", ".join(map(str, peers)) or "none")
     proxy = ProxyServer(store, dev_hosts=dev_hosts, github_fetch=GithubFetcher())

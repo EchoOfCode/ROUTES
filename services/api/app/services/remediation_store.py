@@ -23,7 +23,6 @@ worker memory or from what a model claimed.
 
 from __future__ import annotations
 
-import difflib
 import json
 import uuid
 from dataclasses import dataclass
@@ -34,6 +33,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from routes_shared.buildrun import PatchRejected, validate_patch
+from routes_shared.fingerprint import finding_identity, match_reanalysis
+from routes_shared.patching import unified_diff
 from routes_shared.redaction import (
     REDACTION_ENGINE,
     REDACTION_RULESET_VERSION,
@@ -177,6 +178,9 @@ def create_run(db: Session, *, user: User, assessment: Assessment, findings: lis
         actor_type="user", status="pending", finding_status="open", stage=Stage.QUEUED, stage_entered_at=now,
         max_attempts=settings.max_rounds, source_kind=integration.kind if integration else None,
         source_ref=(integration.repo_ref or None) if integration else None, idempotency_key=idempotency_key,
+        # The exact revision the assessment analysed: every verification and
+        # rescan of this run is pinned to it.
+        source_commit_sha=(assessment.discovery_summary or {}).get("source_commit"),
     )
     db.add(run)
     db.flush()
@@ -421,13 +425,28 @@ def mark_invocation(db: Session, invocation_id: uuid.UUID | None, status: str, d
 
 
 def add_plan(db: Session, run_id: uuid.UUID, worker_id: str, *, batch_id: uuid.UUID, strategy: str,
-             files: list[str], invocation_id: uuid.UUID | None) -> RemediationPlan:
+             files: list[str], invocation_id: uuid.UUID | None, structured: dict | None = None) -> RemediationPlan:
+    """`structured` holds the validated optional fields Model A actually
+    returned (root_cause, expected_behaviour, ...); absent ones stay NULL."""
     run = _locked_run(db, run_id, worker_id)
     version = (db.scalar(select(func.max(RemediationPlan.version))
                          .where(RemediationPlan.remediation_id == run.id)) or 0) + 1
-    art = artifacts.store(db, run.id, "plan", strategy, redaction_status="derived", contains_source=False)
+    structured = {k: v for k, v in (structured or {}).items() if v not in (None, [], "")}
+    body = json.dumps({"strategy": strategy, **structured}, indent=2) if structured else strategy
+    art = artifacts.store(db, run.id, "plan", body, redaction_status="derived", contains_source=False,
+                          media_type="application/json" if structured else "text/plain")
+
+    def text_of(key: str) -> str | None:
+        value = structured.get(key)
+        if isinstance(value, list):
+            value = "\n".join(f"- {v}" for v in value)
+        return redact_text(value, max_length=8000) if value else None
+
     plan = RemediationPlan(
         remediation_id=run.id, patch_batch_id=batch_id, version=version, strategy=redact_text(strategy, max_length=8000),
+        root_cause=text_of("root_cause"), expected_behaviour=text_of("expected_behaviour"),
+        side_effects=text_of("regression_risks"),
+        patch_scope=("Required context:\n" + text_of("required_context")) if structured.get("required_context") else None,
         files_involved=files, functions_involved=[], test_generation_status="generated", schema_valid=True,
         artifact_id=art.id, invocation_id=invocation_id,
     )
@@ -440,15 +459,16 @@ def add_plan(db: Session, run_id: uuid.UUID, worker_id: str, *, batch_id: uuid.U
 
 
 def add_suite(db: Session, run_id: uuid.UUID, worker_id: str, *, batch_id: uuid.UUID, plan_id: uuid.UUID | None,
-              testbench_path: str, testbench: str) -> RemediationTestSuite:
+              testbench_path: str, testbench: str, suite_type: str = "ai_generated",
+              generation_method: str = "llm_a", coverage: dict | None = None) -> RemediationTestSuite:
     run = _locked_run(db, run_id, worker_id)
     version = (db.scalar(select(func.max(RemediationTestSuite.version))
                          .where(RemediationTestSuite.remediation_id == run.id)) or 0) + 1
     art = artifacts.store(db, run.id, "testbench", testbench, redaction_status="derived", contains_source=True)
     suite = RemediationTestSuite(
-        remediation_id=run.id, patch_batch_id=batch_id, plan_id=plan_id, version=version, suite_type="ai_generated",
-        generation_method="llm_a", artifact_id=art.id,
-        coverage={"testbench_path": testbench_path, "provided_to_patch_model": False},
+        remediation_id=run.id, patch_batch_id=batch_id, plan_id=plan_id, version=version, suite_type=suite_type,
+        generation_method=generation_method, artifact_id=art.id,
+        coverage={"testbench_path": testbench_path, "provided_to_patch_model": False, **(coverage or {})},
     )
     db.add(suite)
     db.flush()
@@ -464,6 +484,7 @@ class TestOutcome:
     category: str
     passed: bool
     message: str = ""
+    outcome: str | None = None   # passed | failed | error (an error is never a pass)
 
 
 @dataclass
@@ -476,6 +497,13 @@ class Execution:
     stderr: str = ""
     duration_ms: int = 0
     error_reason: str | None = None
+    # Structured evidence from a real Build & Run sandbox (see
+    # routes_core.verification.BuildVerification), or None.
+    evidence: dict | None = None
+
+
+def _outcome(t: TestOutcome) -> str:
+    return t.outcome if t.outcome in ("passed", "failed", "error") else ("passed" if t.passed else "failed")
 
 
 def record_verification(db: Session, run_id: uuid.UUID, worker_id: str, *, purpose: str, revision_label: str,
@@ -492,9 +520,12 @@ def record_verification(db: Session, run_id: uuid.UUID, worker_id: str, *, purpo
         db.commit()
         return existing
     overall = execution.status if execution.status in ("passed", "failed", "error", "timeout", "killed") else "error"
+    build_failed = (execution.evidence or {}).get("verification") == "BUILD_FAILED"
     if overall in ("passed", "failed") and not execution.tests and purpose in ("baseline", "gate_known_bad",
                                                                                  "candidate"):
-        overall = "error"  # a test run that produced no test result proves nothing
+        # A test run that produced no test result proves nothing, unless the
+        # sandbox showed the application itself did not build or start.
+        overall = "failed" if build_failed and overall == "failed" else "error"
     failure = None
     if overall in ("error", "killed"):
         failure = FailureCategory.INFRASTRUCTURE
@@ -514,16 +545,25 @@ def record_verification(db: Session, run_id: uuid.UUID, worker_id: str, *, purpo
             return "not_run"
         return "passed" if all(t.passed for t in ts) else "failed"
 
+    ev = execution.evidence or {}
+    usage = {"duration_ms": execution.duration_ms} if execution.duration_ms else {}
+    for key in ("duration_seconds", "cleanup", "commit", "patch_applied", "isolation_violations", "verification",
+                "failed_stage", "status", "findings"):
+        if ev.get(key) not in (None, [], {}):
+            usage[key] = ev[key]
     vr = RemediationVerificationRun(
         remediation_id=run.id, patch_batch_id=batch_id, attempt_id=attempt_id, suite_id=suite_id, purpose=purpose,
-        revision_label=revision_label[:200], sandbox_id=sandbox_id, sandbox_runner=runner_kind,
-        sandbox_profile=f"{runner_kind}:remediate_verify", evidence_grade=evidence_grade,
+        revision_label=revision_label[:200], sandbox_id=(ev.get("run_id") or sandbox_id),
+        sandbox_runner=runner_kind, sandbox_profile=runner_kind[:64], evidence_grade=evidence_grade,
+        build_status=str(ev.get("build") or "not_applicable")[:16],
+        startup_status=str(ev.get("startup") or "not_applicable")[:16],
+        database_status=str(ev.get("database") or "not_applicable")[:16],
         functional_status=status_of({"benign", "functional", "regression", "edge_case"}),
         security_status=status_of({"exploit", "security"}), overall_status=overall,
         failure_category=failure, error_reason=redact_text(execution.error_reason, max_length=500) or None,
         log_artifact_id=log_art.id if log_art else None, idempotency_key=idempotency_key,
         ended_at=utcnow(), duration_ms=execution.duration_ms or None,
-        resource_usage={"duration_ms": execution.duration_ms} if execution.duration_ms else {},
+        resource_usage=usage,
     )
     db.add(vr)
     db.flush()
@@ -550,13 +590,18 @@ def record_verification(db: Session, run_id: uuid.UUID, worker_id: str, *, purpo
             db.flush()
             cases[name] = case
         expected = "fail" if (expect_exploits_to_fail and category == "exploit") else "pass"
-        actual = "pass" if t.passed else "fail"
+        outcome = _outcome(t)
+        actual = {"passed": "pass", "failed": "fail"}.get(outcome, "error")
         db.add(RemediationTestResult(
             verification_run_id=vr.id, test_case_id=case.id if case else None, test_name=name, category=category,
-            outcome="passed" if t.passed else "failed", expected_result=expected, actual_result=actual,
-            matches_expectation=expected == actual,
+            outcome=outcome, expected_result=expected, actual_result=actual,
+            matches_expectation=expected == actual, error_category="test_error" if outcome == "error" else None,
             error_detail=redact_text(t.message, max_length=500) or None,
         ))
+    cleanup = ev.get("cleanup") or {}
+    if cleanup and cleanup.get("status") != "complete":
+        audit(db, run, "sandbox_cleanup_incomplete", actor_type="worker", actor_id=worker_id,
+              entity_type="verification_run", entity_id=vr.id, details={"errors": cleanup.get("errors", [])[:5]})
     audit(db, run, "verification_recorded", actor_type="worker", actor_id=worker_id,
           entity_type="verification_run", entity_id=vr.id,
           details={"purpose": purpose, "status": overall, "evidence": evidence_grade, "tests": len(seen)})
@@ -565,28 +610,31 @@ def record_verification(db: Session, run_id: uuid.UUID, worker_id: str, *, purpo
 
 
 def finish_suite_validation(db: Session, run_id: uuid.UUID, worker_id: str, suite_id: uuid.UUID, *,
-                            passed: bool, failed_check: str | None, baseline: Execution | None) -> None:
+                            passed: bool, failed_check: str | None, baseline: Execution | None,
+                            dropped: list[str] | None = None) -> None:
     run = _locked_run(db, run_id, worker_id)
     suite = db.get(RemediationTestSuite, suite_id, with_for_update=True)
     if baseline is None or baseline.status in ("error", "timeout", "killed") or not baseline.tests:
         suite.baseline_status = "error"
     else:
-        reproduced = any(t.category == "exploit" and not t.passed for t in baseline.tests)
+        reproduced = any(t.category == "exploit" and _outcome(t) == "failed" for t in baseline.tests)
         suite.baseline_status = "reproduced" if reproduced else "not_reproduced"
     suite.validation_status = "validated" if passed else ("error" if suite.baseline_status == "error" else "rejected")
     suite.validation_detail = redact_text(failed_check, max_length=1000) if failed_check else None
     baseline_by_name = {t.name: t for t in (baseline.tests if baseline else [])}
+    dropped_names = set(dropped or [])
     for case in db.scalars(select(RemediationTestCase).where(RemediationTestCase.suite_id == suite_id)).all():
         b = baseline_by_name.get(case.name)
         if b is not None:
             case.baseline_outcome = "passed" if b.passed else "failed"
-        case.validation_status = "validated" if passed else "rejected"
+        case.validation_status = "validated" if passed and case.name not in dropped_names else "rejected"
     if suite.plan_id is not None:
         plan = db.get(RemediationPlan, suite.plan_id)
         plan.test_generation_status = "validated" if passed else "rejected"
     audit(db, run, "testbench_validated" if passed else "testbench_rejected", actor_type="worker",
           actor_id=worker_id, entity_type="test_suite", entity_id=suite.id,
-          details={"baseline": suite.baseline_status, "failed_check": failed_check})
+          details={"baseline": suite.baseline_status, "failed_check": failed_check,
+                   "dropped_tests": len(dropped or [])})
     if suite.baseline_status == "reproduced":
         audit(db, run, "original_vulnerability_reproduced", actor_type="worker", actor_id=worker_id,
               entity_type="test_suite", entity_id=suite.id)
@@ -618,30 +666,6 @@ def start_attempt(db: Session, run_id: uuid.UUID, worker_id: str, batch_id: uuid
                                          "of": batch.max_attempts})
     db.commit()
     return attempt
-
-
-def unified_diff(file: str, start_line: int, original: str, candidate: str) -> str:
-    """A unified diff of the snapshot region, with hunk line numbers shifted
-    to the region's position in the real file."""
-    lines = list(difflib.unified_diff(original.splitlines(keepends=True), candidate.splitlines(keepends=True),
-                                      fromfile=f"a/{file}", tofile=f"b/{file}", n=3))
-    offset = start_line - 1
-    out = []
-    for line in lines:
-        if line.startswith("@@"):
-            head = line.split("@@")[1].strip()
-            old, new = head.split(" ")
-
-            def shift(part: str, sign: str) -> str:
-                body = part[1:]
-                start, _, count = body.partition(",")
-                n = int(start) + (offset if int(start) > 0 or count != "0" else 0)
-                return f"{sign}{n}" + (f",{count}" if count else "")
-            line = f"@@ {shift(old, '-')} {shift(new, '+')} @@\n"
-        if not line.endswith("\n"):
-            line += "\n\\ No newline at end of file\n"
-        out.append(line)
-    return "".join(out)
 
 
 def finish_generation(db: Session, run_id: uuid.UUID, worker_id: str, attempt_id: uuid.UUID, *,
@@ -751,7 +775,8 @@ def abandon_open_attempts(db: Session, run_id: uuid.UUID, worker_id: str) -> int
 def record_reanalysis(db: Session, run_id: uuid.UUID, worker_id: str, *, attempt_id: uuid.UUID | None,
                       verification_run_id: uuid.UUID | None, candidate_revision: str,
                       rescan_fingerprints: list[str] | None, evidence_grade: str, scope: str = "batch",
-                      engine_versions: dict | None = None) -> RemediationReanalysisRun:
+                      engine_versions: dict | None = None,
+                      rescan_findings: list[dict] | None = None) -> RemediationReanalysisRun:
     """Compare the original assessment's findings with an independent rescan
     of the patched code: resolved, remaining and newly introduced findings."""
     run = _locked_run(db, run_id, worker_id)
@@ -769,7 +794,25 @@ def record_reanalysis(db: Session, run_id: uuid.UUID, worker_id: str, *, attempt
     )
     db.add(re)
     db.flush()
-    if rescan_fingerprints is not None:
+    if rescan_fingerprints is not None and rescan_findings is not None:
+        identities = {f.fingerprint: finding_identity({"rule_id": f.rule_id, "file": f.file, "endpoint": f.endpoint,
+                                                       "method": f.method})
+                      for f in db.scalars(select(SecurityFinding)
+                                          .where(SecurityFinding.assessment_id == run.assessment_id)).all()}
+        m = match_reanalysis(identities, targeted, [(f["fingerprint"], finding_identity(f)) for f in rescan_findings])
+        still = set(m["targeted_still_present"])
+        for fp in m["resolved"]:
+            db.add(RemediationReanalysisFinding(reanalysis_id=re.id, fingerprint=fp, original_finding_id=baseline[fp],
+                                                change="resolved", targeted=fp in targeted))
+        for fp in m["remaining"]:
+            db.add(RemediationReanalysisFinding(reanalysis_id=re.id, fingerprint=fp, original_finding_id=baseline[fp],
+                                                change="remaining", targeted=fp in targeted or fp in still))
+        for fp in m["new"]:
+            db.add(RemediationReanalysisFinding(reanalysis_id=re.id, fingerprint=fp[:64], change="new"))
+        re.new_count, re.resolved_count, re.remaining_count = len(m["new"]), len(m["resolved"]), len(m["remaining"])
+        re.engine_versions = {**re.engine_versions, "matching": "fingerprint+identity",
+                              "carried_over": len(m["carried"])}
+    elif rescan_fingerprints is not None:
         after = set(rescan_fingerprints)
         for fp, fid in baseline.items():
             change = "remaining" if fp in after else "resolved"

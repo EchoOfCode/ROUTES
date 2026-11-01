@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import stat
+import re
 import tarfile
 import zipfile
 import zlib
@@ -40,7 +41,13 @@ class ExtractionReport:
     skipped_excluded: int = 0
     skipped_binary: int = 0
     root_prefix_stripped: str | None = None
+    # The exact commit of a GitHub archive (git archive writes it into the
+    # pax global header), so later runs can be pinned to the same revision.
+    commit_sha: str | None = None
     warnings: list[str] = field(default_factory=list)
+
+
+_COMMIT = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
 def safe_member_path(name: str) -> PurePosixPath | None:
@@ -151,6 +158,10 @@ def extract_tar_gz(archive: Path, target: Path, *, skip_suffixes: tuple[str, ...
     try:
         with tarfile.open(archive, mode="r:gz") as tf:
             for member in tf:
+                if report.commit_sha is None:
+                    comment = (tf.pax_headers or {}).get("comment", "")
+                    if _COMMIT.match(comment or ""):
+                        report.commit_sha = comment.lower()
                 count += 1
                 if count > MAX_MEMBERS:
                     raise ArchiveError(f"The repository contains more than {MAX_MEMBERS} entries.")

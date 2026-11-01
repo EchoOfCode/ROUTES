@@ -227,6 +227,10 @@ class Finding(_Model):
 
 class SourceResult(_Model):
     source_kind: Str200
+    # Exact revision analysed (GitHub archives only); None when unknown.
+    source_commit: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")] | None = None
+    # True when the analyzer applied a candidate patch before analysing (rescan).
+    patch_applied: bool = False
     support_status: Literal["supported", "partial", "unsupported"]
     support_reason: Str500 = ""
     profile: SourceProfile = Field(default_factory=SourceProfile)

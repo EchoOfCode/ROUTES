@@ -29,7 +29,8 @@ class LLMError(Exception):
 
 class LLMClient:
     def __init__(self, *, endpoint: str, api_key: str, model: str, cache_mode: str = "live",
-                 cache_dir: str | None = None, timeout: float = 60.0, transport: httpx.BaseTransport | None = None) -> None:
+                 cache_dir: str | None = None, timeout: float = 60.0, transport: httpx.BaseTransport | None = None,
+                 proxy: str | None = None) -> None:
         if not endpoint or not model:
             raise LLMError("An LLM endpoint and model must be configured.")
         if cache_mode not in CACHE_MODES:
@@ -45,6 +46,9 @@ class LLMClient:
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             timeout=httpx.Timeout(timeout, connect=10.0),
             transport=transport,
+            # The worker's network only reaches the gateway; the route is the
+            # model-egress session, never ambient proxy environment variables.
+            proxy=proxy, trust_env=False,
         )
 
     def close(self) -> None:

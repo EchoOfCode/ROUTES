@@ -25,6 +25,13 @@ class GateResult:
     passed: bool
     failed_check: str | None = None
     runs: list[tuple[str, SandboxRunResult]] = field(default_factory=list)
+    # The testbench to use from here on, when the gate removed tests that
+    # cannot detect anything (e.g. a functional test failing on the original).
+    testbench: Testbench | None = None
+    # False when regenerating the testbench cannot change the outcome (the
+    # original application does not build, the baseline is deterministic).
+    retryable: bool = True
+    dropped_tests: list[str] = field(default_factory=list)
 
 
 def _request(finding_id: str, file: str, code: str, testbench: Testbench) -> SandboxRunRequest:
@@ -52,6 +59,9 @@ def _exploit_correctly_failed_and_benign_passed(result: SandboxRunResult) -> str
 
 
 def run_gate(runner: SandboxRunner, finding: dict, snapshot: Snapshot, testbench: Testbench) -> GateResult:
+    custom = runner.baseline_gate(finding, snapshot, testbench)
+    if custom is not None:
+        return custom
     finding_id = str(finding.get("id", ""))
     runs: list[tuple[str, SandboxRunResult]] = []
 
@@ -61,7 +71,7 @@ def run_gate(runner: SandboxRunner, finding: dict, snapshot: Snapshot, testbench
     if reason is not None:
         return GateResult(passed=False, failed_check=f"original code: {reason}", runs=runs)
 
-    for bad_fix in known_bad_fixes_for(finding.get("rule_id", "")):
+    for bad_fix in (known_bad_fixes_for(finding.get("rule_id", "")) if runner.supports_known_bad_gate else []):
         result = runner.run(_request(finding_id, snapshot.file, bad_fix.code, testbench))
         runs.append((bad_fix.name, result))
         if result.status == "error" or not result.tests:

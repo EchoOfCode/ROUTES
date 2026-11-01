@@ -179,11 +179,11 @@ class ProxyServer:
             session.connections += 1
             if req.method == "CONNECT":
                 await self._connect(session, req, reader, writer)
-            elif req.method == "GET" and urlsplit(req.target).path == "/import":
+            elif req.method == "GET" and urlsplit(req.target).path == "/import" and session.mode != "models":
                 await self._import(session, req, writer)
             elif req.method in ("GET", "HEAD"):
-                if session.mode == "packages":
-                    raise ProxyError(403, "https_only", "Package downloads must use HTTPS (CONNECT).")
+                if session.mode in ("packages", "models"):
+                    raise ProxyError(403, "https_only", "Only HTTPS (CONNECT) is permitted on this route.")
                 await self._forward(session, req, writer)
             else:
                 raise ProxyError(405, "method_not_allowed", "Only GET and HEAD requests are permitted.")
@@ -220,7 +220,7 @@ class ProxyServer:
         return session
 
     async def _validated(self, session: Session, host: str, port: int) -> tuple[str, list[str]]:
-        if session.mode not in ("web", "packages"):
+        if session.mode not in ("web", "packages", "models"):
             raise ProxyError(403, "mode_forbids_egress", "This session cannot make outbound connections.")
         try:
             host = check_scope(host, port, session.allowed_hosts, session.allowed_ports)

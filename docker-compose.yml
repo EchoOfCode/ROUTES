@@ -19,8 +19,8 @@ name: routes
 
 x-hardening: &hardening
   read_only: true
-  cap_drop: [ALL]
-  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ ALL ]
+  security_opt: [ "no-new-privileges:true" ]
 
 x-api-env: &api-env
   ROUTES_ENV: development
@@ -38,7 +38,7 @@ x-api-env: &api-env
 services:
   # ------------------------------------------------------------- data stores
   postgres:
-    profiles: ["web"]
+    profiles: [ "web" ]
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -47,24 +47,24 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
-    networks: [backend]
+    networks: [ backend ]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
       interval: 5s
       timeout: 3s
       retries: 20
     restart: unless-stopped
 
   redis:
-    profiles: ["web"]
+    profiles: [ "web" ]
     image: redis:7-alpine
-    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
     volumes:
       - ./infrastructure/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
       - redis_data:/data
-    networks: [backend]
+    networks: [ backend ]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -72,29 +72,29 @@ services:
 
   # ------------------------------------------------------------- application
   migrate:
-    profiles: ["web"]
+    profiles: [ "web" ]
     build: { context: ., dockerfile: infrastructure/docker/api.Dockerfile }
     image: routes/api:local
-    command: ["python", "-m", "app.cli"]
+    command: [ "python", "-m", "app.cli" ]
     environment: *api-env
     volumes:
       - uploads:/data/uploads
       - remediation_artifacts:/data/artifacts
-    networks: [backend]
+    networks: [ backend ]
     depends_on:
       postgres: { condition: service_healthy }
     restart: "no"
 
   api:
-    profiles: ["web"]
+    profiles: [ "web" ]
     image: routes/api:local
     <<: *hardening
-    tmpfs: ["/tmp:size=128m"]
+    tmpfs: [ "/tmp:size=128m" ]
     environment: *api-env
     volumes:
       - uploads:/data/uploads
       - remediation_artifacts:/data/artifacts
-    networks: [backend, frontend]
+    networks: [ backend, frontend ]
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
@@ -102,34 +102,34 @@ services:
       redis: { condition: service_healthy }
       sandbox-manager: { condition: service_started }
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)" ]
       interval: 10s
       timeout: 5s
       retries: 10
     restart: unless-stopped
 
   worker-discovery:
-    profiles: ["web"]
+    profiles: [ "web" ]
     build: { context: ., dockerfile: infrastructure/docker/worker.Dockerfile }
     image: routes/worker:local
     <<: *hardening
-    tmpfs: ["/tmp:size=64m"]
-    command: ["python", "-m", "worker.queues.run_worker", "discovery", "results"]
+    tmpfs: [ "/tmp:size=64m" ]
+    command: [ "python", "-m", "worker.queues.run_worker", "discovery", "results" ]
     environment: *api-env
-    networks: [backend]
+    networks: [ backend ]
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
     restart: unless-stopped
 
   worker-source:
-    profiles: ["web"]
+    profiles: [ "web" ]
     image: routes/worker:local
     <<: *hardening
-    tmpfs: ["/tmp:size=64m"]
-    command: ["python", "-m", "worker.queues.run_worker", "source", "results"]
+    tmpfs: [ "/tmp:size=64m" ]
+    command: [ "python", "-m", "worker.queues.run_worker", "source", "results" ]
     environment: *api-env
-    networks: [backend]
+    networks: [ backend ]
     depends_on:
       worker-discovery: { condition: service_started }
     restart: unless-stopped
@@ -138,11 +138,11 @@ services:
   # LLM APIs directly (never from a sandbox). discovery/source stay fully
   # internal, as before.
   worker-remediate:
-    profiles: ["web"]
+    profiles: [ "web" ]
     image: routes/worker:local
     <<: *hardening
-    tmpfs: ["/tmp:size=64m"]
-    command: ["python", "-m", "worker.queues.run_worker", "remediate"]
+    tmpfs: [ "/tmp:size=64m" ]
+    command: [ "python", "-m", "worker.queues.run_worker", "remediate" ]
     environment:
       <<: *api-env
       LLM_A_ENDPOINT: ${LLM_A_ENDPOINT:-https://api.groq.com/openai/v1/chat/completions}
@@ -153,7 +153,7 @@ services:
       LLM_B_MODEL: ${LLM_B_MODEL:-qwen/qwen-2.5-coder-32b-instruct:free}
       LLM_CACHE_MODE: ${LLM_CACHE_MODE:-live}
       LLM_CACHE_DIR: ${LLM_CACHE_DIR:-/tmp/llm_cache}
-      SANDBOX_RUNNER_KIND: ${SANDBOX_RUNNER_KIND:-fake}
+      SANDBOX_RUNNER_KIND: ${SANDBOX_RUNNER_KIND:-build_run}
       BATCH_SIZE: ${BATCH_SIZE:-8}
       LLM_CONCURRENCY: ${LLM_CONCURRENCY:-4}
       MAX_ROUNDS: ${MAX_ROUNDS:-3}
@@ -161,25 +161,30 @@ services:
       REMEDIATION_TOKEN_BUDGET: ${REMEDIATION_TOKEN_BUDGET:-8000}
       REMEDIATION_ARTIFACT_RETENTION_DAYS: ${REMEDIATION_ARTIFACT_RETENTION_DAYS:-30}
       REMEDIATION_RETAIN_MODEL_IO: ${REMEDIATION_RETAIN_MODEL_IO:-true}
+      # No direct internet: the only exit from model-egress is the gateway's
+      # fixed models session (provider allowlist, HTTPS only).
+      LLM_PROXY_URL: ${MODEL_EGRESS_TOKEN:+http://routes:${MODEL_EGRESS_TOKEN}@network-gateway:3128}
+      VERIFY_CACHE_DIR: /tmp/routes-verify
     volumes:
       - remediation_artifacts:/data/artifacts
-    networks: [backend, egress]
+    networks: [ backend, model-egress ]
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
+      sandbox-manager: { condition: service_started }
     restart: unless-stopped
 
   web:
-    profiles: ["web"]
+    profiles: [ "web" ]
     build:
       context: .
       dockerfile: infrastructure/docker/web.Dockerfile
     image: routes/web:local
     <<: *hardening
-    tmpfs: ["/tmp:size=64m", "/app/.next/cache:size=128m,uid=10001,gid=10001"]
+    tmpfs: [ "/tmp:size=64m", "/app/.next/cache:size=128m,uid=10001,gid=10001" ]
     environment:
       API_INTERNAL_URL: http://api:8000
-    networks: [frontend]
+    networks: [ frontend ]
     ports:
       - "127.0.0.1:${WEB_PORT:-3000}:3000"
     depends_on:
@@ -191,7 +196,7 @@ services:
     build: { context: ., dockerfile: infrastructure/docker/sandbox-manager.Dockerfile }
     image: routes/sandbox-manager:local
     <<: *hardening
-    tmpfs: ["/tmp:size=64m"]
+    tmpfs: [ "/tmp:size=64m" ]
     environment:
       SANDBOX_MANAGER_TOKEN: ${SANDBOX_MANAGER_TOKEN}
       GATEWAY_CONTROL_TOKEN: ${GATEWAY_CONTROL_TOKEN:?set in .env}
@@ -220,7 +225,7 @@ services:
       BUILD_TOTAL_TIMEOUT_SECONDS: ${BUILD_TOTAL_TIMEOUT_SECONDS:-2400}
     volumes:
       - uploads:/data/uploads
-    networks: [cli, backend, docker-control, gateway-control]
+    networks: [ cli, backend, docker-control, gateway-control ]
     ports:
       # For the ROUTES CLI on this machine only. Every call needs SANDBOX_MANAGER_TOKEN.
       - "127.0.0.1:${ROUTES_ENGINE_PORT:-8190}:8100"
@@ -233,7 +238,7 @@ services:
       build-db-image: { condition: service_completed_successfully }
       test-runner-image: { condition: service_completed_successfully }
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=3)"]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=3)" ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -255,7 +260,7 @@ services:
       # The only Docker socket mount in ROUTES. Requests are filtered by
       # infrastructure/docker-proxy/docker_proxy/policy.py.
       - /var/run/docker.sock:/var/run/docker.sock
-    networks: [docker-control]
+    networks: [ docker-control ]
     restart: unless-stopped
 
   network-gateway:
@@ -267,11 +272,15 @@ services:
       GATEWAY_CONTROL_TOKEN: ${GATEWAY_CONTROL_TOKEN}
       GATEWAY_DEV_ALLOW_HOSTS: ${GATEWAY_DEV_ALLOW_HOSTS:-}
       CONTROL_SUBNET: ${ROUTES_CONTROL_SUBNET:-172.31.250.0/28}
+      # The remediation worker's model-provider route (empty token: no route).
+      MODEL_EGRESS_TOKEN: ${MODEL_EGRESS_TOKEN:-}
+      MODEL_EGRESS_SUBNET: ${ROUTES_MODEL_EGRESS_SUBNET:-172.31.251.0/28}
+      MODEL_EGRESS_HOSTS: ${MODEL_EGRESS_HOSTS:-api.groq.com,openrouter.ai,api.openai.com}
     sysctls:
       net.ipv4.ip_forward: "0"
-    networks: [gateway-control, egress]
+    networks: [ gateway-control, egress, model-egress ]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)" ]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -282,35 +291,35 @@ services:
   discovery-image:
     build: { context: ., dockerfile: infrastructure/docker/discovery.Dockerfile }
     image: routes/discovery:local
-    command: ["python", "-c", "print('routes/discovery:local is ready')"]
+    command: [ "python", "-c", "print('routes/discovery:local is ready')" ]
     network_mode: none
     restart: "no"
 
   analyzer-image:
     build: { context: ., dockerfile: infrastructure/docker/analyzer.Dockerfile }
     image: routes/analyzer:local
-    command: ["python", "-c", "print('routes/analyzer:local is ready')"]
+    command: [ "python", "-c", "print('routes/analyzer:local is ready')" ]
     network_mode: none
     restart: "no"
 
   build-runner-image:
     build: { context: ., dockerfile: infrastructure/docker/build-runner.Dockerfile }
     image: routes/build-runner:local
-    command: ["python", "-c", "print('routes/build-runner:local is ready')"]
+    command: [ "python", "-c", "print('routes/build-runner:local is ready')" ]
     network_mode: none
     restart: "no"
 
   build-db-image:
     build: { context: ., dockerfile: infrastructure/docker/build-db.Dockerfile }
     image: routes/build-db:local
-    entrypoint: ["true"]
+    entrypoint: [ "true" ]
     network_mode: none
     restart: "no"
 
   test-runner-image:
     build: { context: ., dockerfile: infrastructure/docker/test-runner.Dockerfile }
     image: routes/test-runner:local
-    command: ["python", "-c", "print('routes/test-runner:local is ready')"]
+    command: [ "python", "-c", "print('routes/test-runner:local is ready')" ]
     network_mode: none
     restart: "no"
 
@@ -318,13 +327,13 @@ services:
   # docker compose --profile testing up -d  (and set GATEWAY_DEV_ALLOW_HOSTS=sample-site)
   sample-site:
     image: python:3.12-slim
-    profiles: ["testing"]
-    command: ["python", "/site/server.py", "8080"]
+    profiles: [ "testing" ]
+    command: [ "python", "/site/server.py", "8080" ]
     <<: *hardening
     user: "65534:65534"
     volumes:
       - ./services/discovery/tests/sample_site:/site:ro
-    networks: [egress]
+    networks: [ egress ]
     restart: unless-stopped
 
 networks:
@@ -342,6 +351,13 @@ networks:
       config:
         - subnet: ${ROUTES_CONTROL_SUBNET:-172.31.250.0/28}
   egress: {}
+  # worker-remediate <-> network-gateway only (internal, fixed subnet): the
+  # remediation worker's model-provider traffic must pass the gateway.
+  model-egress:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${ROUTES_MODEL_EGRESS_SUBNET:-172.31.251.0/28}
 
 volumes:
   postgres_data: {}

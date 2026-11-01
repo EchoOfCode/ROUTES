@@ -25,11 +25,14 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import select
 
+from routes_shared.fingerprint import finding_identity
 from routes_shared.redaction import redact_for_llm, redact_text, unredacted_secret_count
 from routes_shared.remediation import Snapshot
 from routes_shared.remediation_workflow import InvalidTransition, Stage
 
 from app.core.config import get_settings
+from routes_core.testplan import generate as generate_test_plan
+
 from app.models import (
     ProjectIntegration,
     Remediation,
@@ -40,6 +43,7 @@ from app.models import (
     RemediationPlan,
     RemediationTestSuite,
     SecurityFinding,
+    SourceAnalysisResult,
 )
 from app.services import artifacts, outbox
 from app.services import remediation_store as store
@@ -60,12 +64,12 @@ def _tx(fn, *args, **kwargs):
         return fn(db, *args, **kwargs)
 
 
-def _source_ref(integration: ProjectIntegration | None) -> SourceRef | None:
+def _source_ref(integration: ProjectIntegration | None, commit_sha: str | None = None) -> SourceRef | None:
     if integration is None:
         return None
     if integration.kind in ("github_public", "github_private"):
         return SourceRef(kind="github", owner=integration.repo_owner, repo=integration.repo_name,
-                         ref=integration.repo_ref)
+                         ref=integration.repo_ref, commit_sha=commit_sha)
     if integration.kind == "zip":
         # No upload_id is persisted past the original scan (only filename and
         # sha256 are kept), so a zip-sourced rescan has nothing stable to
@@ -77,10 +81,34 @@ def _source_ref(integration: ProjectIntegration | None) -> SourceRef | None:
 def _execution(result: SandboxRunResult) -> store.Execution:
     return store.Execution(
         status=result.status, duration_ms=result.duration_ms, stdout=result.stdout, stderr=result.stderr,
-        error_reason=result.error_reason,
-        tests=[store.TestOutcome(name=t.name, category=t.category, passed=t.passed, message=t.message)
+        error_reason=result.error_reason, evidence=result.evidence,
+        tests=[store.TestOutcome(name=t.name, category=t.category, passed=t.passed, message=t.message,
+                                 outcome=t.outcome)
                for t in result.tests],
     )
+
+
+def build_run_testbench(deterministic_plan: dict, finding: dict):
+    """Testbench factory for the Build & Run verifier: the deterministic
+    security tests ROUTES generated from the finding's data flow, plus the
+    schema-validated functional tests Model A proposed (which the baseline
+    still has to confirm). Returns (Model A result, Testbench)."""
+    from routes_shared.buildrun import TestPlan
+    from routes_shared.remediation import Testbench
+
+    from worker.llm.llm_a_plan import call_llm_a_plan
+
+    def factory(llm_a_client, _finding, snapshot):
+        result = call_llm_a_plan(llm_a_client, finding, snapshot)
+        tests = list(deterministic_plan["tests"])
+        ids = {t["id"] for t in tests}
+        for t in result.functional_tests:
+            if t["id"] not in ids:
+                tests.append(t)
+                ids.add(t["id"])
+        plan = TestPlan.model_validate({**deterministic_plan, "tests": tests}).model_dump(by_alias=True)
+        return result, Testbench(path="routes-testplan.json", content=json.dumps(plan, sort_keys=True))
+    return factory
 
 
 @dataclass
@@ -151,12 +179,22 @@ class PersistingObserver(LoopObserver):
     def testbench_generated(self, attempt, llm_a_result, testbench) -> None:
         j, st = self.job, self.state
         j.transition(Stage.PLANNING)
+        structured = {k: getattr(llm_a_result, k, None) for k in (
+            "root_cause", "expected_behaviour", "security_test_scenarios", "functional_test_scenarios",
+            "regression_risks", "required_context")}
         st.plan = _tx(store.add_plan, j.run_id, j.worker_id, batch_id=st.batch_id,
                       strategy=llm_a_result.prompt_for_fix, files=[st.snapshot["file"]],
-                      invocation_id=j.llm_a.last_invocation_id)
+                      invocation_id=j.llm_a.last_invocation_id, structured=structured)
         j.transition(Stage.GENERATING_TESTS)
-        suite = _tx(store.add_suite, j.run_id, j.worker_id, batch_id=st.batch_id, plan_id=st.plan.id,
-                    testbench_path=testbench.path, testbench=testbench.content)
+        if j.runner.kind == "build_run":
+            suite = _tx(store.add_suite, j.run_id, j.worker_id, batch_id=st.batch_id, plan_id=st.plan.id,
+                        testbench_path=testbench.path, testbench=testbench.content,
+                        suite_type="deterministic_security", generation_method="template+llm_a",
+                        coverage={"model_functional_tests": len(getattr(llm_a_result, "functional_tests", [])),
+                                  "model_tests_rejected": getattr(llm_a_result, "rejected_tests", [])[:10]})
+        else:
+            suite = _tx(store.add_suite, j.run_id, j.worker_id, batch_id=st.batch_id, plan_id=st.plan.id,
+                        testbench_path=testbench.path, testbench=testbench.content)
         st.suite_id = suite.id
 
     def gate_finished(self, attempt, testbench, gate_result) -> None:
@@ -173,7 +211,7 @@ class PersistingObserver(LoopObserver):
                 idempotency_key=f"{st.suite_id}:gate:{i}", batch_id=st.batch_id, suite_id=st.suite_id,
                 expect_exploits_to_fail=True)
         _tx(store.finish_suite_validation, j.run_id, j.worker_id, st.suite_id, passed=gate_result.passed,
-            failed_check=gate_result.failed_check, baseline=baseline)
+            failed_check=gate_result.failed_check, baseline=baseline, dropped=gate_result.dropped_tests)
 
     # patch attempts ------------------------------------------------------
     def round_started(self, round_no: int) -> None:
@@ -216,7 +254,8 @@ class PersistingObserver(LoopObserver):
                  sandbox_id=request.run_id)
         _tx(store.record_reanalysis, j.run_id, j.worker_id, attempt_id=st.attempt_id, verification_run_id=vr.id,
             candidate_revision=f"candidate:{st.attempt_id}", rescan_fingerprints=result.rescan_fingerprints,
-            evidence_grade=j.runner.evidence_grade, engine_versions={"runner": j.runner.kind})
+            evidence_grade=j.runner.evidence_grade, engine_versions={"runner": j.runner.kind},
+            rescan_findings=result.rescan_findings)
 
     def round_finished(self, record: RoundRecord, passed: bool) -> None:
         j, st = self.job, self.state
@@ -245,6 +284,13 @@ class RemediationJob:
                                         template_version=llm_b_module.PROMPT_TEMPLATE_VERSION,
                                         batch=self.batch_holder)
         self.hints: dict[str, dict] = {}
+        # Tests (and the CLI) may supply an immutable retained archive instead
+        # of the project integration.
+        self.source_override: SourceRef | None = None
+        if runner.kind == "build_run":
+            from worker.llm.llm_a_plan import PROMPT_TEMPLATE_VERSION as PLAN_TEMPLATE
+
+            self.llm_a.template_version = PLAN_TEMPLATE
 
     def transition(self, stage: str, *, resume: bool = False) -> None:
         _tx(store.transition, self.run_id, self.worker_id, stage, resume=resume)
@@ -307,7 +353,12 @@ class RemediationJob:
             run = db.get(Remediation, self.run_id)
             integration = db.scalar(select(ProjectIntegration)
                                     .where(ProjectIntegration.project_id == run.project_id))
-            source_ref = _source_ref(integration)
+            source_ref = self.source_override or _source_ref(integration, run.source_commit_sha)
+            routes = []
+            if self.runner.kind == "build_run":
+                analysis = db.scalar(select(SourceAnalysisResult)
+                                     .where(SourceAnalysisResult.assessment_id == run.assessment_id))
+                routes = list(analysis.routes) if analysis is not None else []
             rows = db.execute(
                 select(RemediationPatchBatch, RemediationFinding, SecurityFinding)
                 .join(RemediationFinding, RemediationFinding.patch_batch_id == RemediationPatchBatch.id)
@@ -316,11 +367,17 @@ class RemediationJob:
                 .order_by(RemediationPatchBatch.sequence)
             ).all()
             batches = [(b.id, b.status, b.attempts_used, b.max_attempts, f.id, f.snapshot,
-                        {"id": str(f.id), "rule_id": f.rule_id, "title": f.title,
+                        {"id": str(f.id), "rule_id": f.rule_id, "title": f.title, "type": f.type,
+                         "status": f.status, "file": f.file, "line": f.line, "endpoint": f.endpoint,
+                         "method": f.method, "technical_details": f.technical_details,
                          "plain_description": f.plain_description, "fingerprint": f.fingerprint})
                        for b, _rf, f in rows]
-            baseline = set(db.scalars(select(SecurityFinding.fingerprint)
-                                      .where(SecurityFinding.assessment_id == run.assessment_id)).all())
+            originals = db.scalars(select(SecurityFinding)
+                                   .where(SecurityFinding.assessment_id == run.assessment_id)).all()
+            baseline = {f.fingerprint for f in originals}
+            identities = {f.fingerprint: finding_identity({"rule_id": f.rule_id, "file": f.file,
+                                                           "endpoint": f.endpoint, "method": f.method})
+                          for f in originals}
 
         first = True
         accepted_batches = 0
@@ -359,8 +416,30 @@ class RemediationJob:
                 _tx(store.finish_batch, self.run_id, self.worker_id, batch_id, "human_review")
                 continue
 
+            factory = None
+            if self.runner.kind == "build_run":
+                from worker.sandbox.buildrun import SourceUnavailable, source_spec
+
+                try:
+                    source_spec(source_ref)
+                except SourceUnavailable as exc:
+                    self.hints[key] = {"unsupported_reason": f"Dynamic verification is not possible: {exc}"}
+                    _tx(store.finish_batch, self.run_id, self.worker_id, batch_id, "inconclusive")
+                    continue
+                generated = generate_test_plan(routes, [finding_dict])
+                if not generated.flows_covered:
+                    notes = "; ".join(generated.notes[:3])
+                    self.hints[key] = {"unsupported_reason": (
+                        "ROUTES could not generate a deterministic security test for this finding, so the original "
+                        f"vulnerability cannot be reproduced ({notes or 'no HTTP route reaches it'}).")}
+                    _tx(store.finish_batch, self.run_id, self.worker_id, batch_id, "inconclusive")
+                    continue
+                self.runner.bind(source_ref, self.should_cancel)
+                factory = build_run_testbench(generated.plan, finding_dict)
+
             state = BatchState(batch_id=batch_id, finding_id=finding_id, snapshot=snapshot)
             outcome = run_remediation_loop(
+                testbench_factory=factory, baseline_identities=identities,
                 finding=finding_dict,
                 snapshot=Snapshot(file=snapshot["file"], start_line=snapshot["start_line"],
                                   end_line=snapshot["end_line"], code=snapshot["code"]),
@@ -401,19 +480,22 @@ class RemediationJob:
                        RemediationPatchAttempt.verification_status == "passed")
             ).all()
             files = []
+            patches = []
             for attempt, art in accepted:
                 rf = db.scalar(select(RemediationFinding).where(RemediationFinding.patch_batch_id == attempt.batch_id))
                 finding = db.get(SecurityFinding, rf.finding_id)
                 code = artifacts.read_text(art)
-                if code is None:
+                patch = artifacts.read_text(db.get(RemediationArtifact, attempt.patch_artifact_id))                     if attempt.patch_artifact_id else None
+                if code is None or patch is None:
                     return
                 files.append(SandboxFile(path=finding.snapshot["file"], content=code))
+                patches.append(patch)  # batches never share a file, so the diffs combine cleanly
             suite = db.get(RemediationTestSuite, suite_id) if suite_id else None
             testbench = artifacts.read_text(db.get(RemediationArtifact, suite.artifact_id)) if suite else ""
         self.transition(Stage.POST_REMEDIATION_ANALYSIS)
         request = SandboxRunRequest(run_id=str(uuid.uuid4()), finding_id="", round_no=0, files=files,
                                     testbench=SandboxFile(path="combined.test.ts", content=testbench or ""),
-                                    source_ref=source_ref)
+                                    source_ref=source_ref, patch="".join(patches))
         result = self.runner.run(request)
         vr = _tx(store.record_verification, self.run_id, self.worker_id, purpose="combined_rescan",
                  revision_label="combined:all accepted batches", execution=_execution(result),
@@ -421,7 +503,8 @@ class RemediationJob:
                  idempotency_key=f"{self.run_id}:combined:{request.run_id}", sandbox_id=request.run_id)
         _tx(store.record_reanalysis, self.run_id, self.worker_id, attempt_id=None, verification_run_id=vr.id,
             candidate_revision="combined:all accepted batches", rescan_fingerprints=result.rescan_fingerprints,
-            evidence_grade=self.runner.evidence_grade, scope="combined", engine_versions={"runner": self.runner.kind})
+            evidence_grade=self.runner.evidence_grade, scope="combined", engine_versions={"runner": self.runner.kind},
+            rescan_findings=result.rescan_findings)
 
 
 def run_remediate_job(job_id: str, finding_id: str | None = None) -> None:
@@ -431,14 +514,18 @@ def run_remediate_job(job_id: str, finding_id: str | None = None) -> None:
     settings = get_settings()
     llm_a_client = LLMClient(endpoint=settings.llm_a_endpoint, api_key=settings.llm_a_api_key,
                              model=settings.llm_a_model, cache_mode=settings.llm_cache_mode,
-                             cache_dir=settings.llm_cache_dir)
+                             cache_dir=settings.llm_cache_dir, proxy=settings.llm_proxy_url or None)
     llm_b_client = LLMClient(endpoint=settings.llm_b_endpoint, api_key=settings.llm_b_api_key,
                              model=settings.llm_b_model, cache_mode=settings.llm_cache_mode,
-                             cache_dir=settings.llm_cache_dir)
+                             cache_dir=settings.llm_cache_dir, proxy=settings.llm_proxy_url or None)
     sandbox_runner = build_sandbox_runner(settings.sandbox_runner_kind, manager_url=settings.sandbox_manager_url,
-                                          manager_token=settings.sandbox_manager_token)
+                                          manager_token=settings.sandbox_manager_token,
+                                          cache_dir=settings.verify_cache_dir)
     try:
         RemediationJob(uuid.UUID(job_id), settings, sandbox_runner, llm_a_client, llm_b_client).run()
     finally:
         llm_a_client.close()
         llm_b_client.close()
+        close = getattr(sandbox_runner, "close", None)
+        if close is not None:
+            close()

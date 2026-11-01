@@ -56,6 +56,9 @@ class SourceRun(BaseModel):
     repo: str | None = None
     ref: str | None = None
     credential_handle: str | None = Field(default=None, max_length=100)
+    # Post-remediation rescan: a validated unified diff the analyzer applies
+    # (strictly, no fuzz) to its temporary copy before analysing it.
+    patch: str | None = Field(default=None, max_length=1024 * 1024)
 
     @field_validator("upload_id")
     @classmethod
@@ -208,6 +211,8 @@ def build_app(settings: Settings | None = None, *, docker: DockerAPI | None = No
                     raise ValueError("upload_id required")
                 if spec.source == "github" and not (spec.owner and spec.repo):
                     raise ValueError("owner and repo required")
+                if spec.patch is not None:
+                    validate_patch(spec.patch)
                 host = ""
                 if spec.target_url:
                     host = parse_target_url(spec.target_url, dev_allow_hosts=dev_hosts()).hostname

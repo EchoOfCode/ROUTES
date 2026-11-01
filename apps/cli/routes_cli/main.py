@@ -547,6 +547,68 @@ def findings(id: Optional[str] = typer.Option(None, "--id", help="Show one findi
 
 
 @app.command()
+def remediate(source: Optional[str] = typer.Argument(None, help="GitHub repository URL or local folder of the application"),
+              id: Optional[str] = typer.Option(None, "--id", "-f", help="Finding sequence number (e.g. 02) to remediate"),
+              assessment: Optional[str] = typer.Option(None, "--assessment", "-a", help="Assessment ID (prefix)"),
+              project: Optional[str] = typer.Option(None, "--project", "-p"),
+              output: str = typer.Option("remediation-patch.diff", "--output", "-o", help="Where to write the generated patch diff"),
+              as_json: bool = typer.Option(False, "--json", help="Print result as JSON")):
+    """Remediate a security finding using the dual-LLM remediation engine."""
+    from pathlib import Path
+    from rich.panel import Panel
+    from rich.syntax import Syntax
+    from routes_cli.remediation import run_cli_remediation
+
+    ctx = _ctx()
+    con = _console()
+    g = glyphs(con)
+
+    try:
+        a = actions.latest(ctx, assessment=assessment, project=project)
+    except PlanError as exc:
+        _fail(str(exc))
+    if a is None or not a.findings:
+        _fail("No security findings to remediate. Run `routes analyze <source>` first.")
+
+    target = None
+    if id:
+        target = next((f for f in a.findings if id.lstrip("0") == str(f.seq) or id == f"{f.seq:02d}"), None)
+        if target is None:
+            _fail(f"No finding {id} in assessment {a.id[:8]}.")
+    else:
+        target = a.findings[0]
+
+    con.print(f"[heading]AI REMEDIATION ENGINE[/]  [muted]Finding #{target.seq:02d} · {escape(target.title)}[/]\n")
+    con.print(f"  Target:     [path]{escape(target.file or '')}:{target.line}[/]")
+    con.print(f"  Rule:       [accent]{escape(target.rule_id)}[/]")
+    con.print(f"  Severity:   {escape(target.severity.upper())}\n")
+
+    try:
+        res = run_cli_remediation(target, source_hint=source, console=con)
+    except Exception as exc:
+        _fail(f"Remediation failed: {exc}")
+
+    Path(output).write_text(res.candidate_patch, encoding="utf-8")
+
+    if as_json:
+        print(json.dumps(res.__dict__, indent=2))
+        return
+
+    con.print(f"\n[ok]{g.done}[/] [bold]Model A Root-Cause Analysis:[/]\n  {escape(res.model_a_analysis)}")
+    con.print(f"\n[ok]{g.done}[/] [bold]Model A Strategy:[/]\n  {escape(res.model_a_strategy)}")
+    con.print(f"\n[ok]{g.done}[/] [bold]Model B Candidate Patch (unified diff):[/]")
+    con.print(Panel(Syntax(res.candidate_patch, "diff", theme="monokai", line_numbers=True), title=f"Patch for {escape(res.file)}", expand=False))
+
+    if res.validated:
+        con.print(f"[ok]{g.done} Patch validation passed:[/] unified diff applies cleanly without fuzz.")
+    else:
+        con.print(f"[warn]! Patch validation warning:[/] {escape(res.error or 'check diff before applying')}")
+
+    con.print(f"\n[ok]Patch written to[/] [path]{Path(output).resolve()}[/]")
+    con.print(f"\n[accent]Next:[/] verify in disposable Docker sandbox:\n  [bold]routes verify {source or a.source_label or '.'} --tests auto --patch {output}[/]")
+
+
+@app.command()
 def history(project: Optional[str] = typer.Option(None, "--project", "-p"),
             as_json: bool = typer.Option(False, "--json")):
     """Show previous assessments (the five most recent are kept per project)."""

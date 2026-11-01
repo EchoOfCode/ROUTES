@@ -131,7 +131,7 @@ class Runner:
         if report.files_written == 0:
             raise Stop(Verification.INCONCLUSIVE, "source", "The source snapshot contains no files.")
         patch = self.apply_patch()
-        self.record("source", {"status": "ready", "files": report.files_written,
+        self.record("source", {"status": "ready", "files": report.files_written, "commit": report.commit_sha,
                                "skipped_links": report.skipped_links, "skipped_excluded": report.skipped_excluded,
                                "skipped_binaries": report.skipped_binary, "patch": patch})
         self.stage("source_ready", f"{report.files_written} files ready" + (", patch applied" if patch["applied"] else ""),

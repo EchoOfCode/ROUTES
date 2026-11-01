@@ -420,34 +420,45 @@ class BuildRunExecutor:
         return out
 
     async def cleanup(self) -> None:
-        """Idempotent: every step tolerates resources that are already gone."""
+        """Idempotent: every step tolerates resources that are already gone.
+        Failures are recorded on the run (``run.cleanup``), never only logged."""
+        errors: list[str] = []
+        removed = {"containers": 0, "networks": 0}
+
+        def failed(what: str, name: str, exc: Exception) -> None:
+            log.exception("%s failed for %s", what, name)
+            errors.append(f"{what} {name}: {type(exc).__name__}")
+            self.audit("cleanup_failed", name, step=what)
+
         for name in reversed(self.containers):
             try:
                 await self.docker.remove(name)
+                removed["containers"] += 1
                 self.audit("container_removed", name)
-            except Exception:  # noqa: BLE001
-                log.exception("container removal failed for %s", name)
+            except Exception as exc:  # noqa: BLE001
+                failed("container removal", name, exc)
         self.containers.clear()
         if self.gateway_on:
             try:
                 await self.docker.disconnect(self.gateway_on, self.settings.gateway_container)
                 self.audit("gateway_detached", self.gateway_on)
-            except Exception:  # noqa: BLE001
-                log.exception("gateway disconnect failed for %s", self.gateway_on)
+            except Exception as exc:  # noqa: BLE001
+                failed("gateway disconnect", self.gateway_on, exc)
             self.gateway_on = None
         for name in list(self.networks):
             try:
                 await self.docker.remove_network(name)
+                removed["networks"] += 1
                 self.audit("network_removed", name)
-            except Exception:  # noqa: BLE001
-                log.exception("network removal failed for %s", name)
+            except Exception as exc:  # noqa: BLE001
+                failed("network removal", name, exc)
         self.networks.clear()
         if self.session_id:
             try:
                 self.run.network_summary = await self.gateway.close(self.session_id)
                 self.audit("egress_session_closed", self.session_id)
-            except Exception:  # noqa: BLE001
-                log.exception("gateway session close failed")
+            except Exception as exc:  # noqa: BLE001
+                failed("gateway session close", self.session_id, exc)
             self.session_id = None
         from manager.runs import remove_upload
 
@@ -455,6 +466,13 @@ class BuildRunExecutor:
             remove_upload(self.settings.uploads_dir, upload_id)
             self.audit("artefacts_deleted", upload_id)
         self.dirs.clear()
+        previous = self.run.cleanup or {}
+        self.run.cleanup = {
+            "status": "complete" if not (errors or previous.get("errors")) else "incomplete",
+            "containers_removed": removed["containers"] + previous.get("containers_removed", 0),
+            "networks_removed": removed["networks"] + previous.get("networks_removed", 0),
+            "errors": (previous.get("errors", []) + errors)[:20],
+        }
 
 
 _ORDER = [p.value for p in (Phase.CREATED, Phase.SOURCE_READY, Phase.DEPENDENCIES_INSTALLING, Phase.DATABASE_STARTING,

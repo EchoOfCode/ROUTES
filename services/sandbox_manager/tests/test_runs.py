@@ -323,3 +323,46 @@ def test_upload_size_limit(tmp_path):
         r = c.post("/uploads", content=big, headers=AUTH)
         assert r.status_code == 413
     assert list(tmp_path.iterdir()) == []
+
+
+PATCH = "--- a/x.js\n+++ b/x.js\n@@ -1 +1 @@\n-a\n+b\n"
+
+
+def test_rescan_patch_is_staged_read_only_and_removed(tmp_path):
+    """Post-remediation rescans: the patch reaches the analyzer only as a
+    read-only /input file, and is deleted with the run."""
+    async def go():
+        docker = FakeDocker(stdout=result_line({}))
+        captured = {}
+        orig = docker.create_container
+        staged = {}
+
+        async def capture(name, spec):
+            captured.update(spec)
+            sub = spec["HostConfig"]["Mounts"][0]["VolumeOptions"]["Subpath"]
+            staged["patch"] = (tmp_path / sub / "patch.diff").read_text()
+            return await orig(name, spec)
+
+        docker.create_container = capture
+        m = RunManager(settings(tmp_path), docker, FakeGateway(), CredentialStore())
+        await _run(m, "source", {"source": "github", "owner": "acme", "repo": "shop", "ref": "a" * 40,
+                                 "target_host": "", "patch": PATCH})
+        mount = captured["HostConfig"]["Mounts"][0]
+        assert mount["Target"] == "/input" and mount["ReadOnly"] is True
+        assert staged["patch"] == PATCH
+        assert list(tmp_path.iterdir()) == []
+    asyncio.run(go())
+
+
+def test_api_validates_rescan_patches(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from manager.app import build_app
+
+    app = build_app(settings(tmp_path), docker=FakeDocker(stdout=result_line({})), gateway=FakeGateway())
+    client = TestClient(app)
+    auth = {"Authorization": "Bearer " + "x" * 32}
+    body = {"kind": "source", "source": "github", "owner": "acme", "repo": "shop", "ref": "main"}
+    bad = client.post("/runs", json={**body, "patch": "--- a/../etc/passwd\n+++ b/../etc/passwd\n@@ -1 +1 @@\n-a\n+b\n"},
+                      headers=auth)
+    assert bad.status_code == 422 and "patch rejected" in bad.json()["detail"]

@@ -37,7 +37,8 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from routes_shared.fingerprint import normalize_snippet
+from routes_shared.fingerprint import finding_identity, match_reanalysis, normalize_snippet
+from routes_shared.patching import unified_diff
 from routes_shared.remediation import FixConstraints, Snapshot, Testbench
 
 from worker.fix_table import lookup_fix
@@ -109,44 +110,63 @@ class _Cancelled(Exception):
     pass
 
 
+TestbenchFactory = Callable[[LLMClient, dict, Snapshot], "tuple[LlmAResult, Testbench]"]
+
+
+def default_testbench(llm_a_client: LLMClient, finding: dict, snapshot: Snapshot) -> tuple[LlmAResult, Testbench]:
+    """S7: LLM A writes a JS testbench for the snapshot's function."""
+    llm_a_result = call_llm_a(llm_a_client, finding, snapshot)
+    return llm_a_result, Testbench(path=_testbench_path(snapshot.file), content=llm_a_result.testbench)
+
+
 def _establish_testbench(llm_a_client: LLMClient, sandbox_runner: SandboxRunner, finding: dict,
                          snapshot: Snapshot, observer: LoopObserver | None = None,
-                         should_cancel: Callable[[], bool] | None = None) -> tuple[LlmAResult, Testbench] | None:
+                         should_cancel: Callable[[], bool] | None = None,
+                         testbench_factory: TestbenchFactory | None = None
+                         ) -> tuple[LlmAResult, Testbench] | GateResult | None:
     """Calls LLM A and gates the testbench (S7), regenerating on gate
-    failure up to MAX_TESTBENCH_ATTEMPTS total tries. Returns
-    (LlmAResult, Testbench) once gated, or None if it never passes."""
+    failure up to MAX_TESTBENCH_ATTEMPTS total tries (fewer when the gate
+    says regenerating cannot help). Returns (LlmAResult, Testbench) once
+    gated, else the last failing GateResult."""
     observer = observer or LoopObserver()
+    factory = testbench_factory or default_testbench
+    last: GateResult | None = None
     for attempt in range(1, MAX_TESTBENCH_ATTEMPTS + 1):
         if should_cancel is not None and should_cancel():
             raise _Cancelled
         observer.stage("analysis")
-        llm_a_result = call_llm_a(llm_a_client, finding, snapshot)
-        testbench = Testbench(path=_testbench_path(snapshot.file), content=llm_a_result.testbench)
+        llm_a_result, testbench = factory(llm_a_client, finding, snapshot)
         observer.testbench_generated(attempt, llm_a_result, testbench)
         observer.stage("baseline_verification")
         gate_result = run_gate(sandbox_runner, finding, snapshot, testbench)
         observer.stage("validating_tests")
         observer.gate_finished(attempt, testbench, gate_result)
         if gate_result.passed:
-            return llm_a_result, testbench
-    return None
+            return llm_a_result, gate_result.testbench or testbench
+        last = gate_result
+        if not gate_result.retryable:
+            break
+    return last
 
 
 def run_remediation_loop(*, finding: dict, snapshot: Snapshot, llm_a_client: LLMClient, llm_b_client: LLMClient,
                          sandbox_runner: SandboxRunner, source_ref: SourceRef, baseline_fingerprints: set[str],
                          max_rounds: int = 3, stagnation_rounds: int = 2,
                          should_cancel: Callable[[], bool] | None = None,
-                         observer: LoopObserver | None = None, first_round: int = 1) -> LoopOutcome:
+                         observer: LoopObserver | None = None, first_round: int = 1,
+                         testbench_factory: TestbenchFactory | None = None,
+                         baseline_identities: dict[str, tuple] | None = None) -> LoopOutcome:
     """`first_round` > 1 resumes a batch whose earlier attempts were already
     used; they still count against `max_rounds`."""
     observer = observer or LoopObserver()
     try:
-        established = _establish_testbench(llm_a_client, sandbox_runner, finding, snapshot, observer, should_cancel)
+        established = _establish_testbench(llm_a_client, sandbox_runner, finding, snapshot, observer, should_cancel,
+                                           testbench_factory)
     except _Cancelled:
         return LoopOutcome(status="cancelled", reason="cancelled by request")
-    if established is None:
-        return LoopOutcome(status="needs_human_review",
-                           reason="the testbench did not pass the gate after 2 regeneration attempts")
+    if not isinstance(established, tuple):
+        detail = f": {established.failed_check}" if established is not None and established.failed_check else ""
+        return LoopOutcome(status="needs_human_review", reason=f"the testbench did not pass the gate{detail}")
     llm_a_result, testbench = established
 
     constraints = FixConstraints(file=snapshot.file, start_line=snapshot.start_line, end_line=snapshot.end_line)
@@ -219,10 +239,12 @@ def run_remediation_loop(*, finding: dict, snapshot: Snapshot, llm_a_client: LLM
                                reason="oscillation: the same candidate was produced again", rounds=rounds)
 
         observer.stage("testing")
+        candidate_patch = unified_diff(snapshot.file, snapshot.start_line, snapshot.code, candidate_code)
         verify_request = SandboxRunRequest(
             run_id=str(uuid.uuid4()), finding_id=finding_id, round_no=round_no,
             files=[SandboxFile(path=snapshot.file, content=candidate_code)],
             testbench=SandboxFile(path=testbench.path, content=testbench.content),
+            patch=candidate_patch,
         )
         verify_result = sandbox_runner.run(verify_request)
         observer.verified(round_no, verify_request, verify_result)
@@ -247,7 +269,7 @@ def run_remediation_loop(*, finding: dict, snapshot: Snapshot, llm_a_client: LLM
             run_id=str(uuid.uuid4()), finding_id=finding_id, round_no=round_no,
             files=[SandboxFile(path=snapshot.file, content=candidate_code)],
             testbench=SandboxFile(path=testbench.path, content=testbench.content),
-            source_ref=source_ref,
+            source_ref=source_ref, patch=candidate_patch,
         )
         rescan_result = sandbox_runner.run(rescan_request)
         observer.rescanned(round_no, rescan_request, rescan_result)
@@ -255,6 +277,11 @@ def run_remediation_loop(*, finding: dict, snapshot: Snapshot, llm_a_client: LLM
         fingerprint_gone = original_fingerprint not in rescan_fps
         known = baseline_fingerprints | ({original_fingerprint} if original_fingerprint else set())
         new_fingerprints = sorted(rescan_fps - known)
+        if baseline_identities is not None and rescan_result.rescan_findings is not None:
+            m = match_reanalysis(baseline_identities, {original_fingerprint} if original_fingerprint else set(),
+                                 [(f["fingerprint"], finding_identity(f)) for f in rescan_result.rescan_findings])
+            fingerprint_gone = not m["targeted_still_present"]
+            new_fingerprints = m["new"]
         record.rescan_diff = {"fingerprint_gone": fingerprint_gone, "new_fingerprints": new_fingerprints}
         rounds.append(record)
 

@@ -394,3 +394,51 @@ def test_packages_session_with_repository_imports_once():
         second = await _request(port, f"GET /import HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
         assert second.startswith(b"HTTP/1.1 409")
     run(go())
+
+
+# ------------------------------------------------- remediation model egress
+def _model_session(store, subnet="127.0.0.0/8"):
+    from gateway.main import model_session
+
+    return model_session(store, env={"MODEL_EGRESS_TOKEN": "m" * 32, "MODEL_EGRESS_SUBNET": subnet,
+                                     "MODEL_EGRESS_HOSTS": "api.groq.com, openrouter.ai"})
+
+
+def test_model_egress_reaches_only_the_configured_providers_over_https():
+    async def go():
+        _, store, seen, _, port, _ = await _harness({"api.groq.com": [PUBLIC], "evil.example": [PUBLIC],
+                                                     "openrouter.ai": [PUBLIC]}, github=GithubFetcher())
+        s = _model_session(store)
+        assert s.expires_at == float("inf") and s.allowed_ports == frozenset({443})
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(f"CONNECT api.groq.com:443 HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        await writer.drain()
+        assert (await reader.readuntil(b"\r\n\r\n")).startswith(b"HTTP/1.1 200")
+        writer.close()
+        out = await _request(port, f"CONNECT evil.example:443 HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        assert b"host_out_of_scope" in out
+        out = await _request(port, f"CONNECT openrouter.ai:80 HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        assert b"port_not_allowed" in out
+        out = await _request(port, f"GET http://api.groq.com/v1 HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        assert b"https_only" in out
+        out = await _request(port, f"GET /import HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        assert out.startswith(b"HTTP/1.1 4")
+        out = await _request(port, b"CONNECT api.groq.com:443 HTTP/1.1\r\n\r\n")
+        assert out.startswith(b"HTTP/1.1 407")
+        assert len(seen) == 1
+    run(go())
+
+
+def test_model_egress_is_bound_to_its_network_and_off_unless_configured():
+    async def go():
+        _, store, _, _, port, _ = await _harness({"api.groq.com": [PUBLIC]})
+        s = _model_session(store, subnet="10.99.0.0/24")  # the test client is not on it
+        out = await _request(port, f"CONNECT api.groq.com:443 HTTP/1.1\r\n{auth(s.token)}\r\n".encode())
+        assert b"peer_not_allowed" in out
+    run(go())
+    from gateway.main import model_session
+
+    assert model_session(SessionStore(), env={}) is None
+    with pytest.raises(SystemExit):
+        model_session(SessionStore(), env={"MODEL_EGRESS_TOKEN": "short", "MODEL_EGRESS_SUBNET": "10.0.0.0/24",
+                                           "MODEL_EGRESS_HOSTS": "api.groq.com"})
