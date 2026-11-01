@@ -15,6 +15,17 @@ What the generated tests check (all against the sandboxed copy only):
   - a stacked ``pg_sleep(3)`` must not delay the response (time-based signal,
     which also catches injection whose errors are hidden).
 
+* security, per reflected XSS finding: a unique script marker sent in the traced input must not come
+  back unescaped in the response;
+* security, per unauthenticated database route (broken access control): an anonymous request must be
+  rejected (401/403/404, or a redirect to sign in);
+* security, for missing security headers: the page must send every header the analysis found missing;
+* security, for a wildcard CORS policy: a request from a foreign origin must not be granted access.
+
+Findings whose effect cannot be observed with one HTTP request (DOM-only XSS, ownership checks that need
+two signed-in users, cookie flags, TLS settings, weak crypto, secrets) get no runtime test; the
+remediation loop then relies on the static rescan, and says so.
+
 Payloads are non-destructive: no writes, drops or data changes. They pass on a
 correctly parameterised implementation, so the same plan verifies a fix. A
 passing plan is evidence about these specific inputs, not proof that an
@@ -147,6 +158,20 @@ def generate(routes: list[dict], findings: list[dict], *, health_path: str = "/"
                                   f"does not delay the response",
                           "request": req, "expect": {"max_ms": SLEEP_LIMIT_MS, "status_not": [502, 503, 504]}})
 
+    # ---------------------------------------- XSS, access control, configuration
+    for n, f in enumerate([f for f in findings if f.get("type") != "SQL Injection"], start=1):
+        if len(tests) >= MAX_SECURITY:
+            notes.append(f"Only the first {MAX_SECURITY} security tests were generated.")
+            break
+        built, why = _class_tests(f, n, routes, health_path)
+        if built:
+            covered += 1
+            tests.extend(built)
+        elif why:
+            skipped += 1
+            where = f.get("file") or f.get("rule_id")
+            notes.append(f"No runtime test for {where}{':' + str(f['line']) if f.get('line') else ''}: {why}")
+
     # ---------------------------------------------------------------- smoke
     seen: set[str] = set()
     smoke = 0
@@ -177,6 +202,117 @@ def generate(routes: list[dict], findings: list[dict], *, health_path: str = "/"
     plan = {"version": 1, "health": {"path": health_path, "expect_status": list(range(200, 500))}, "tests": tests}
     TestPlan.model_validate(plan)   # never hand out a plan the engine would reject
     if not covered:
-        notes.append("No SQL injection flow with a known request input was found, so the plan has no security tests. "
+        notes.append("No finding could be turned into a runtime security test, so the plan has no security tests. "
                      "It still checks that the application builds, starts and answers.")
     return GeneratedPlan(plan, notes, covered, skipped)
+
+
+# ------------------------------------------------------------ other classes
+XSS_MARKERS = ["<script>routes_xss_probe()</script>", '"><svg onload=routes_xss_probe()>']
+CORS_PROBE_ORIGIN = "https://routes-cors-probe.example"
+AUTH_REJECTED = [401, 403, 404, 302, 303, 307, 308]
+CLASS_LABELS = {"SQL Injection": "SQL injection", "Cross-Site Scripting": "XSS",
+                "Broken Access Control": "Access control", "Insecure Configuration": "Misconfiguration"}
+RUNTIME_CHECKS = {
+    "routes.xss.reflected-response": "script markers in the traced input must come back escaped",
+    "routes.a01.unprotected-db-route": "an anonymous request must be rejected",
+    "routes.config.missing-security-headers": "the page must send the missing security headers",
+    "routes.config.cors-wildcard": "a foreign origin must not be granted access",
+}
+NO_RUNTIME = {
+    "routes.xss.dom-sink-tainted": "DOM-based XSS runs in the browser, not in one HTTP response",
+    "routes.xss.dangerously-set-inner-html": "the markup is rendered in the browser, not observable in one "
+                                             "HTTP response",
+    "routes.a01.missing-ownership-check": "an ownership check needs two signed-in users",
+    "routes.config.insecure-cookie": "the request that sets this cookie is application-specific",
+}
+
+
+def vuln_class(f: dict) -> str:
+    """Short class label: SQL injection, XSS, Access control, Misconfiguration, or the finding type."""
+    rule = f.get("rule_id") or ""
+    if rule.startswith(("routes.config.", "routes.crypto.")):
+        return "Misconfiguration"
+    if rule.startswith("routes.sqli."):
+        return "SQL injection"
+    if rule.startswith("routes.xss."):
+        return "XSS"
+    if rule.startswith("routes.a01."):
+        return "Access control"
+    return CLASS_LABELS.get(f.get("type") or "", f.get("type") or "Other")
+
+
+def _route_for_file(routes: list[dict], file: str | None) -> dict | None:
+    return next((r for r in routes if file and r.get("file") == file and (r.get("path") or "").startswith("/")),
+                None)
+
+
+def _class_tests(f: dict, n: int, routes: list[dict], health_path: str) -> tuple[list[dict], str | None]:
+    """Runtime security tests for one non-SQL-injection finding, or ([], why there are none)."""
+    rule = f.get("rule_id") or ""
+    if f.get("status") != "potential":
+        return [], "the finding is inconclusive"
+    details = f.get("technical_details") or {}
+    where = f"{f.get('file')}:{f.get('line')}" if f.get("line") else (f.get("file") or rule)
+    method = (f.get("method") or "GET").upper()
+    method = "GET" if method == "ANY" else method
+    endpoint = f.get("endpoint")
+
+    if rule == "routes.xss.reflected-response":
+        source = details.get("source") or {}
+        kind, name = source.get("kind") or "", (source.get("name") or "").strip()
+        if not endpoint or not endpoint.startswith("/"):
+            return [], "no HTTP route is known for this flow"
+        if not name or not FIELD_NAME.match(name):
+            return [], f"the exact input name could not be determined ({kind or 'unknown source'})"
+        out = []
+        for i, marker in enumerate(XSS_MARKERS, start=1):
+            req = _request(method, endpoint, kind, name, marker)
+            if req is None:
+                return [], f"input kind '{kind}' cannot be placed in a request automatically"
+            out.append({"id": _id("xss", n, f"marker{i}"), "category": "security",
+                        "name": f'XSS ({where}): markup in {method} {endpoint} {kind} "{name}" comes back escaped',
+                        "request": req, "expect": {"status_not": SERVER_ERRORS, "body_not_contains": [marker]}})
+        return out, None
+
+    if rule == "routes.a01.unprotected-db-route":
+        if not endpoint or not endpoint.startswith("/"):
+            return [], "no HTTP route is known for this handler"
+        req: dict = {"method": method, "path": _fill_path(endpoint)}
+        if method in ("POST", "PUT", "PATCH"):
+            req.update(json={}, headers={"Content-Type": "application/json"})
+        return [{"id": _id("a01", n, "anonymous"), "category": "security",
+                 "name": f"Access control ({where}): an anonymous {method} {endpoint} is rejected",
+                 "request": req, "expect": {"status": AUTH_REJECTED}}], None
+
+    if rule == "routes.config.missing-security-headers":
+        missing = [h for h in details.get("missing_headers") or [] if isinstance(h, str)]
+        if not missing:
+            return [], "the missing headers are not recorded; re-run the analysis"
+        return [{"id": _id("hdr", n, "security-headers"), "category": "security",
+                 "name": f"Misconfiguration: {health_path} sends {', '.join(missing)}",
+                 "request": {"method": "GET", "path": health_path},
+                 "expect": {"headers_present": missing}}], None
+
+    if rule == "routes.config.cors-wildcard":
+        route = _route_for_file(routes, f.get("file"))
+        path = _fill_path(route["path"]) if route else health_path
+        return [{"id": _id("cors", n, "foreign-origin"), "category": "security",
+                 "name": f"Misconfiguration ({where}): {path} does not grant access to a foreign origin",
+                 "request": {"method": "GET", "path": path, "headers": {"Origin": CORS_PROBE_ORIGIN}},
+                 "expect": {"header_not": {"access-control-allow-origin": ["*", CORS_PROBE_ORIGIN]}}}], None
+
+    return [], NO_RUNTIME.get(rule, "this kind of finding cannot be observed with an HTTP request")
+
+
+def runtime_check(f: dict, routes: list[dict] | None = None, health_path: str = "/") -> tuple[str | None, str]:
+    """(what the runtime security test for `f` checks, or None; why there is none)."""
+    if f.get("type") == "SQL Injection":
+        gen = generate(routes or [], [f], health_path=health_path)
+        if any(t["category"] == "security" for t in gen.plan["tests"]):
+            return "quote and pg_sleep probes on the traced input", ""
+        return None, "the SQL injection flow has no request input ROUTES can target"
+    built, why = _class_tests(f, 1, routes or [], health_path)
+    if built:
+        return RUNTIME_CHECKS.get(f.get("rule_id") or "", "runtime probe"), ""
+    return None, why or "no runtime test"

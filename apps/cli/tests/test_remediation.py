@@ -17,9 +17,8 @@ import tests.conftest as cf
 from routes_cli.remediation import llm as llm_mod
 from tests.test_commands import invoke
 
-ROUTE = (
-    'import { pool } from "@/lib/db";\n'
-    "\n"
+HEADER = 'import { pool } from "@/lib/db";\n\n'
+HANDLER = (
     "export async function GET(req) {\n"
     '  const q = new URL(req.url).searchParams.get("q");\n'
     "  const sql = `SELECT * FROM products WHERE name = '${q}'`;\n"
@@ -27,14 +26,16 @@ ROUTE = (
     "  return Response.json(r.rows);\n"
     "}\n"
 )
-FIXED = (
+ROUTE = HEADER + HANDLER
+# The handler starts near the top of the file, so the snapshot includes the imports (lines 1-8).
+FIXED = HEADER + (
     "export async function GET(req) {\n"
     '  const q = new URL(req.url).searchParams.get("q");\n'
     "  const r = await pool.query('SELECT * FROM products WHERE name = $1', [q]);\n"
     "  return Response.json(r.rows);\n"
     "}"
 )
-WRONG = (
+WRONG = HEADER + (
     "export async function GET(req) {\n"
     '  const q = new URL(req.url).searchParams.get("q").replace("--", "");\n'
     "  const r = await pool.query(`SELECT * FROM products WHERE name = '${q}'`);\n"
@@ -42,6 +43,19 @@ WRONG = (
     "}"
 )
 WITH_IMPORT = 'import sqlstring from "sqlstring";\n' + FIXED
+AUTH_FIXED = ('import { pool } from "@/lib/db";\nimport { auth } from "@/auth";\n\n'
+              "export async function GET(req) {\n"
+              "  const session = await auth();\n"
+              "  if (!session?.user) return new Response('Unauthorized', { status: 401 });\n"
+              + HANDLER.split("\n", 1)[1].rstrip("\n"))
+NEXT_CONFIG = "module.exports = {\n  reactStrictMode: true,\n};\n"
+NEXT_CONFIG_FIXED = (
+    "module.exports = {\n  reactStrictMode: true,\n  async headers() {\n    return [{ source: '/:path*', headers: [\n"
+    "      { key: 'Content-Security-Policy', value: \"default-src 'self'\" },\n"
+    "      { key: 'X-Frame-Options', value: 'DENY' },\n    ] }];\n  },\n};")
+PAGE = ("export default function Page({ html }) {\n"
+        "  return <div dangerouslySetInnerHTML={{ __html: html }} />;\n}\n")
+PAGE_FIXED = "export default function Page({ html }) {\n  return <div>{html}</div>;\n}"
 
 PLAN = {"prompt_for_fix": "Use a parameterised query ($1) for q.", "root_cause": "q is interpolated into SQL.",
         "expected_behaviour": "Quotes in q are data.", "functional_tests": [
@@ -55,11 +69,28 @@ def app_project(tmp_path, monkeypatch):
     root = tmp_path / "shop"
     (root / "app/api/search").mkdir(parents=True)
     (root / "app/api/search/route.ts").write_text(ROUTE, newline="\n")
+    (root / "app/page.tsx").write_text(PAGE, newline="\n")
+    (root / "next.config.js").write_text(NEXT_CONFIG, newline="\n")
     (root / "package.json").write_text('{"dependencies": {"next": "15.0.0", "pg": "8.0.0"}}')
     result = json.loads(json.dumps(cf.SOURCE_RESULT))
     sqli = result["findings"][0]
     sqli["technical_details"]["source"] = {"kind": "query", "name": "q"}
     sqli["snapshot"] = {"file": "app/api/search/route.ts", "start_line": 3, "end_line": 8, "code": "..."}
+    common = {"status": "potential", "confidence": "medium", "plain_description": "x", "evidence_summary": "x",
+              "recommendation": "x"}
+    result["findings"] += [
+        {**common, "type": "Broken Access Control", "severity": "medium", "file": "app/api/search/route.ts",
+         "line": 3, "endpoint": "/api/search", "method": "GET", "rule_id": "routes.a01.unprotected-db-route",
+         "title": "Database read endpoint with no authentication check", "technical_details": {"cwe": "CWE-306"},
+         "snapshot": {"file": "app/api/search/route.ts", "start_line": 3, "end_line": 8, "code": "..."}},
+        {**common, "type": "Insecure Configuration", "severity": "low", "file": "next.config.js", "line": None,
+         "endpoint": None, "method": None, "rule_id": "routes.config.missing-security-headers",
+         "title": "Security response headers are not configured",
+         "technical_details": {"missing_headers": ["content-security-policy", "x-frame-options"]}},
+        {**common, "type": "Cross-Site Scripting", "severity": "medium", "file": "app/page.tsx", "line": 2,
+         "endpoint": None, "method": None, "rule_id": "routes.xss.dangerously-set-inner-html",
+         "title": "HTML inserted without sanitising", "technical_details": {"cwe": "CWE-79"}},
+    ]
     monkeypatch.setattr(cf, "SOURCE_RESULT", result)
     return root
 
@@ -67,14 +98,18 @@ def app_project(tmp_path, monkeypatch):
 class Script:
     """What the engine and the models will do, in order."""
 
-    def __init__(self, *, candidates, sandbox=(), rescans=(), baseline="reproduced"):
+    def __init__(self, *, candidates, sandbox=(), rescans=(), baseline="reproduced", fixes="routes.sqli"):
         self.candidates = list(candidates)      # Model B replies (code)
         self.sandbox = list(sandbox)            # "pass" | "fail" per candidate build
         self.rescans = list(rescans)            # "fixed" | "present" per rescan
         self.baseline = baseline                # reproduced | not_reproduced | build_failed
+        self.fixes = fixes                      # rule prefix a "fixed" rescan no longer reports
         self.prompts_b: list[str] = []
         self.specs: list[dict] = []
         self.stored: list[dict] = []            # findings of the analysed assessment (fingerprints)
+
+    def seq(self, rule: str) -> str:
+        return f"{next(f['seq'] for f in self.stored if f['rule_id'] == rule):02d}"
 
 
 class RemediationEngine:
@@ -99,7 +134,7 @@ class RemediationEngine:
         if spec["kind"] == "build_run":
             return self._build(rid, spec)
         outcome = self.s.rescans.pop(0)
-        findings = [{**f} for f in self.s.stored if outcome == "present" or not f["rule_id"].startswith("routes.sqli")]
+        findings = [{**f} for f in self.s.stored if outcome == "present" or not f["rule_id"].startswith(self.s.fixes)]
         return {"id": rid, "status": "completed", "finished_at": 1.0,
                 "result": {"findings": findings, "patch_applied": bool(spec.get("patch"))}}
 
@@ -149,7 +184,7 @@ def remediation(engine, app_project, monkeypatch):
         ctx = Context.load()
         with ctx.session() as db:
             a = repo.latest_finished(db, None)
-            script.stored = [{"fingerprint": f.fingerprint, "rule_id": f.rule_id, "file": f.file, "line": f.line,
+            script.stored = [{"seq": f.seq, "fingerprint": f.fingerprint, "rule_id": f.rule_id, "file": f.file, "line": f.line,
                               "endpoint": f.endpoint, "method": f.method, "title": f.title} for f in a.findings]
         monkeypatch.setattr(Context, "engine_client", lambda self: RemediationEngine(script))
 
@@ -182,11 +217,13 @@ def _run(*args):
 
 def test_loop_retries_with_feedback_and_verifies_the_fix(remediation, app_project, routes_home):
     s = remediation(Script(candidates=[WRONG, FIXED], sandbox=["fail", "pass"], rescans=["fixed"]))
-    r, run = _run("01")
+    r, run = _run(s.seq("routes.sqli.pg-tainted-query"))
     assert r.exit_code == 0, r.output
     f = run["findings"][0]
     assert run["verdict"] == "verified_fixed" and f["resolution"] == "verified_fixed"
-    assert f["region"] == {"file": "app/api/search/route.ts", "start_line": 3, "end_line": 8, "exact": True}
+    # The analyzer's function bounds (3-8), widened to the top of the file so imports can be added.
+    assert f["region"] == {"file": "app/api/search/route.ts", "start_line": 1, "end_line": 8, "exact": True}
+    assert f["vuln_class"] == "SQL injection" and "pg_sleep" in f["runtime_check"]
     assert [a["outcome"] for a in f["attempts"]] == ["failed", "passed"]
     stages = [st for st, _ in f["stage_history"]]
     assert stages[:9] == ["preparing_context", "redacting", "analysis", "planning", "generating_tests",
@@ -209,8 +246,8 @@ def test_loop_retries_with_feedback_and_verifies_the_fix(remediation, app_projec
 
 
 def test_oscillation_stops_the_loop_for_human_review(remediation):
-    remediation(Script(candidates=[WRONG, WRONG], sandbox=["fail"]))
-    r, run = _run("01")
+    s = remediation(Script(candidates=[WRONG, WRONG], sandbox=["fail"]))
+    r, run = _run(s.seq("routes.sqli.pg-tainted-query"))
     f = run["findings"][0]
     assert r.exit_code == 3 and f["resolution"] == "human_review" and "same candidate" in f["reason"]
     assert [a["outcome"] for a in f["attempts"]] == ["failed", "oscillation"]
@@ -218,7 +255,7 @@ def test_oscillation_stops_the_loop_for_human_review(remediation):
 
 def test_invalid_candidate_never_reaches_the_sandbox(remediation):
     s = remediation(Script(candidates=[WITH_IMPORT]))
-    r, run = _run("01", "--attempts", "1")
+    r, run = _run(s.seq("routes.sqli.pg-tainted-query"), "--attempts", "1")
     f = run["findings"][0]
     assert f["attempts"][0]["outcome"] == "rejected" and "new imports" in f["attempts"][0]["failure"]
     assert f["resolution"] == "human_review"
@@ -227,7 +264,7 @@ def test_invalid_candidate_never_reaches_the_sandbox(remediation):
 
 def test_unbuildable_app_falls_back_to_rescan_and_is_only_inconclusive(remediation):
     s = remediation(Script(candidates=[FIXED], rescans=["fixed"], baseline="build_failed"))
-    r, run = _run("01")
+    r, run = _run(s.seq("routes.sqli.pg-tainted-query"))
     f = run["findings"][0]
     assert f["mode"] == "static" and f["attempts"][0]["outcome"] == "passed"
     assert f["resolution"] == "inconclusive" and r.exit_code == 3
@@ -262,12 +299,78 @@ async def test_tui_remediate_confirms_shows_the_pipeline_and_the_verdict(remedia
     s = remediation(Script(candidates=[WRONG, FIXED], sandbox=["fail", "pass"], rescans=["fixed"]))
     app = make_app()
     async with app.run_test(size=(140, 60)) as pilot:
-        await type_text(pilot, "/remediate 01")
+        await type_text(pilot, f"/remediate {s.seq('routes.sqli.pg-tainted-query')}")
         await pilot.press("enter")
         assert await wait_for(pilot, lambda: isinstance(app.screen, ConfirmModal), 10)
         assert s.specs == [] and s.prompts_b == []           # nothing runs before confirmation
         await pilot.press("tab", "enter")                    # "Start"
         assert await wait_for(pilot, lambda: app.view_name == "remediated", 20)
+        await pilot.pause(0.5)                               # let the result view mount and render
         text = app.export_screenshot().replace("&#160;", " ")
         assert "VERIFIED" in text and "FIXED" in text and "Attempt" in text
         assert "combined.diff" in str(app.query_one("#hint").render())
+
+
+# ------------------------------------------------- every class through the loop
+def _security_tests(s: Script) -> list[dict]:
+    baseline = next(sp for sp in s.specs if sp["kind"] == "build_run" and not sp.get("patch"))
+    return [t for t in baseline["test_plan"]["tests"] if t["category"] == "security"]
+
+
+def test_access_control_fix_is_verified_by_an_anonymous_request(remediation):
+    rule = "routes.a01.unprotected-db-route"
+    s = remediation(Script(candidates=[AUTH_FIXED], sandbox=["pass"], rescans=["fixed"], fixes=rule))
+    r, run = _run(s.seq(rule))
+    f = run["findings"][0]
+    assert f["vuln_class"] == "Access control" and f["resolution"] == "verified_fixed", f["reason"]
+    (probe,) = _security_tests(s)
+    assert (probe["request"]["method"], probe["request"]["path"]) == ("GET", "/api/search")
+    assert not probe["request"]["headers"] and 401 in probe["expect"]["status"]      # anonymous: no credentials
+    # Importing the project's own auth helper is allowed (not a new dependency), and Model B was told
+    # what the sandbox would check.
+    assert "an anonymous request must be rejected" in s.prompts_b[0]
+    assert '+import { auth } from "@/auth";' in f["attempts"][0]["patch"]
+
+
+def test_missing_security_headers_fix_is_verified_by_a_header_check(remediation):
+    rule = "routes.config.missing-security-headers"
+    s = remediation(Script(candidates=[NEXT_CONFIG_FIXED], sandbox=["pass"], rescans=["fixed"], fixes=rule))
+    r, run = _run(s.seq(rule))
+    f = run["findings"][0]
+    assert f["vuln_class"] == "Misconfiguration" and f["resolution"] == "verified_fixed", f["reason"]
+    assert f["region"] == {"file": "next.config.js", "start_line": 1, "end_line": 3, "exact": True}  # whole file
+    (probe,) = _security_tests(s)
+    assert probe["expect"]["headers_present"] == ["content-security-policy", "x-frame-options"]
+
+
+def test_browser_side_xss_runs_the_loop_on_the_rescan_and_says_why_it_is_inconclusive(remediation):
+    rule = "routes.xss.dangerously-set-inner-html"
+    s = remediation(Script(candidates=[PAGE_FIXED], sandbox=["pass"], rescans=["fixed"], fixes=rule))
+    r, run = _run(s.seq(rule))
+    f = run["findings"][0]
+    assert f["vuln_class"] == "XSS" and f["runtime_check"] is None
+    assert "no runtime security test" in f["steps"]["testbench"]["detail"]
+    assert "rendered in the browser" in f["steps"]["testbench"]["detail"]
+    assert f["attempts"][0]["outcome"] == "passed" and f["resolution"] == "inconclusive" and r.exit_code == 3
+    assert _security_tests(s) == []
+
+
+def test_picker_groups_findings_by_class(remediation):
+    s = remediation(Script(candidates=[]))
+    from routes_cli.main import _pick_findings
+    from routes_cli.context import Context
+    from routes_cli import actions
+    from rich.console import Console
+
+    con = Console(record=True, width=160, color_system=None)
+    import typer
+    orig = typer.prompt
+    typer.prompt = lambda *a, **k: "0"
+    try:
+        assert _pick_findings(con, actions.latest(Context.load())) is None
+    finally:
+        typer.prompt = orig
+    text = con.export_text()
+    for label in ("SQL injection", "XSS", "Access control", "Misconfiguration"):
+        assert label in text
+    assert "next.config.js" in text

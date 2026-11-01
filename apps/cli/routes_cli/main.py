@@ -362,7 +362,7 @@ def _print_generated(con, generated, path) -> None:
     for t in generated.plan["tests"]:
         counts[t["category"]] = counts.get(t["category"], 0) + 1
     summary = ", ".join(f"{n} {cat}" for cat, n in sorted(counts.items()))
-    con.print(f"[heading]Generated test plan[/] [muted]({summary}; {generated.flows_covered} SQL injection flow(s) "
+    con.print(f"[heading]Generated test plan[/] [muted]({summary}; {generated.flows_covered} finding(s) "
               f"covered, {generated.flows_skipped} skipped)[/]" + (f"\n  written to [path]{escape(str(path))}[/]"
                                                                   if path else ""))
     for note in generated.notes:
@@ -378,7 +378,8 @@ def testplan(source: Optional[str] = typer.Argument(None, help="GitHub URL, fold
              output: str = typer.Option("routes-testplan.json", "--output", "-o", help="Where to write the plan")):
     """Generate a build-and-run test plan from the latest source analysis.
 
-    Uses the routes and SQL injection flows found by `routes analyze`. Review
+    Uses the routes and findings of `routes analyze` (SQL injection, XSS, access
+    control, security headers, CORS). Review
     and edit the file, then run `routes verify <source> --tests <file>`.
     """
     from pathlib import Path
@@ -560,14 +561,21 @@ def findings(id: Optional[str] = typer.Option(None, "--id", help="Show one findi
 # ------------------------------------------------------------- remediation
 def _pick_findings(con, a) -> list | None:
     """Interactive choice: all code findings, or some of them by number."""
+    from routes_core.testplan import vuln_class
     from routes_cli.remediation import RemediationError, actionable, select
 
     code = actionable(a)
     g = glyphs(con)
     con.print("\n[heading]Findings that can be remediated[/]")
+    groups: dict[str, list] = {}
     for f in code:
-        con.print(f"  [accent]{f.seq:02d}[/]  {severity_text(f.severity, g)}  {escape(f.title)}  "
-                  f"[muted]{escape(f.file or '')}:{f.line}[/]")
+        groups.setdefault(vuln_class({"type": f.type, "rule_id": f.rule_id}), []).append(f)
+    for klass, items in groups.items():
+        con.print(f"  [label]{escape(klass)}[/]")
+        for f in items:
+            loc = f"{f.file}:{f.line}" if f.line else f.file
+            con.print(f"    [accent]{f.seq:02d}[/]  {severity_text(f.severity, g)}  {escape(f.title)}  "
+                      f"[muted]{escape(loc or '')}[/]")
     while True:
         try:
             raw = typer.prompt("Remediate which? (Enter = all, e.g. 01,03, 0 = cancel)", default="all",

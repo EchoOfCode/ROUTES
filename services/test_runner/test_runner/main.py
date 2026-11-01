@@ -28,7 +28,8 @@ MAX_BODY_READ = 1024 * 1024
 EXCERPT = 300
 
 
-def evaluate(case: TestCase, status: int | None, body: str, elapsed_ms: int, error: str | None) -> tuple[str, list[str]]:
+def evaluate(case: TestCase, status: int | None, body: str, elapsed_ms: int, error: str | None,
+             headers: dict[str, str] | None = None) -> tuple[str, list[str]]:
     if error is not None:
         return "error", [error]
     exp = case.expect
@@ -56,19 +57,28 @@ def evaluate(case: TestCase, status: int | None, body: str, elapsed_ms: int, err
                     reasons.append(f"JSON {key!r} is {data.get(key)!r}, expected {value!r}")
     if exp.max_ms is not None and elapsed_ms > exp.max_ms:
         reasons.append(f"took {elapsed_ms} ms (limit {exp.max_ms} ms)")
+    got = {k.lower(): v for k, v in (headers or {}).items()}
+    for name in exp.headers_present:
+        if not got.get(name, "").strip():
+            reasons.append(f"response header {name!r} is missing")
+    for name, forbidden in exp.header_not.items():
+        value = got.get(name)
+        if value is not None and value.strip().lower() in {f.lower() for f in forbidden}:
+            reasons.append(f"response header {name!r} is {value.strip()!r}")
     return ("passed" if not reasons else "failed"), reasons
 
 
 def execute(client: httpx.Client, base: str, case: TestCase) -> dict:
     req = case.request
     started = time.monotonic()
-    status, body, error = None, "", None
+    status, body, error, headers = None, "", None, {}
     try:
         with client.stream(req.method, base + req.path, params=req.query or None, headers=req.headers or None,
                            json=req.json_body if req.json_body is not None else None,
                            content=req.body.encode() if req.body is not None else None,
                            timeout=req.timeout_seconds) as r:
             status = r.status_code
+            headers = dict(r.headers)
             chunks, size = [], 0
             for chunk in r.iter_bytes():
                 chunks.append(chunk)
@@ -81,7 +91,7 @@ def execute(client: httpx.Client, base: str, case: TestCase) -> dict:
     except httpx.HTTPError as exc:
         error = f"request failed ({type(exc).__name__})"
     elapsed = int((time.monotonic() - started) * 1000)
-    outcome, reasons = evaluate(case, status, body, elapsed, error)
+    outcome, reasons = evaluate(case, status, body, elapsed, error, headers)
     return {"id": case.id, "name": case.name, "category": case.category, "method": req.method, "path": req.path,
             "status": outcome, "http_status": status, "duration_ms": elapsed, "reasons": reasons[:10],
             "response_excerpt": redact_text(body[:EXCERPT], max_length=EXCERPT) if outcome != "passed" else ""}

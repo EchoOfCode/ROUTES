@@ -47,6 +47,10 @@ def _mark(status: str, g: Glyphs, spinner: str) -> str:
             "skipped": f"[faint]{g.skipped}[/]", "running": f"[accent]{spinner}[/]"}.get(status, f"[faint]{g.pending}[/]")
 
 
+def _loc(fr: FindingRun) -> str:
+    return f"{fr.file}:{fr.line}" if fr.line else fr.file
+
+
 def _elapsed(seconds: float) -> str:
     seconds = int(seconds)
     return f"{seconds // 60}m{seconds % 60:02d}s" if seconds >= 60 else f"{seconds}s"
@@ -72,8 +76,9 @@ def _attempt_row(a, g: Glyphs, spinner: str) -> str:
 
 
 def finding_block(fr: FindingRun, g: Glyphs, spinner: str, *, index: int, total: int) -> RenderableType:
-    head = (f"[heading]{index}/{total}  #{fr.seq:02d} {escape(fr.title)}[/]  {severity_text(fr.severity, g)}  "
-            f"[path]{escape(fr.file)}:{fr.line}[/]")
+    head = (f"[heading]{index}/{total}  #{fr.seq:02d} {escape(fr.title)}[/]  [accent]{escape('[' + fr.vuln_class + ']')}[/]  "
+            f"{severity_text(fr.severity, g)}  "
+            f"[path]{escape(_loc(fr))}[/]")
     if fr.resolution:
         style, word = RESOLUTION.get(fr.resolution, ("muted", fr.resolution))
         head += f"  [{style}]{word}[/]"
@@ -124,8 +129,8 @@ def _compact(fr: FindingRun, g: Glyphs, index: int, total: int) -> Text:
         tail = f"[{style}]{word}[/] [muted]· {used}/{fr.max_attempts} attempt(s)[/]"
     else:
         tail = f"[faint]{g.pending} waiting[/]"
-    return Text.from_markup(f"  {index}/{total}  #{fr.seq:02d} {escape(fr.title[:60])}  "
-                            f"[faint]{escape(fr.file)}:{fr.line}[/]  {tail}")
+    return Text.from_markup(f"  {index}/{total}  #{fr.seq:02d} {escape('[' + fr.vuln_class + ']')} {escape(fr.title[:60])}  "
+                            f"[faint]{escape(_loc(fr))}[/]  {tail}")
 
 
 def summary(run: RemediationRun, g: Glyphs, saved=None) -> RenderableType:  # noqa: ANN001
@@ -133,7 +138,7 @@ def summary(run: RemediationRun, g: Glyphs, saved=None) -> RenderableType:  # no
     parts: list[RenderableType] = [Text.from_markup(
         f"[heading]Outcome[/]  [{style}]{escape((run.verdict or '').upper().replace('_', ' '))}[/]  {escape(text)}")]
     t = Table(box=None, header_style="label", padding=(0, 2))
-    for col in ("Finding", "Location", "Attempts", "Baseline", "Sandbox", "Rescan", "Verdict"):
+    for col in ("Finding", "Class", "Location", "Attempts", "Baseline", "Sandbox", "Rescan", "Verdict"):
         t.add_column(col)
     for fr in run.findings:
         rs, word = RESOLUTION.get(fr.resolution or "", ("muted", fr.resolution or "-"))
@@ -143,7 +148,7 @@ def summary(run: RemediationRun, g: Glyphs, saved=None) -> RenderableType:  # no
             if na:
                 return "[faint]n/a[/]"
             return f"[ok]{g.done}[/]" if gates.get(key) else f"[err]{g.failed}[/]"
-        t.add_row(f"#{fr.seq:02d} {escape(fr.title[:40])}", f"{escape(fr.file)}:{fr.line}",
+        t.add_row(f"#{fr.seq:02d} {escape(fr.title[:40])}", escape(fr.vuln_class), escape(_loc(fr)),
                   f"{len(fr.attempts)}/{fr.max_attempts}",
                   gate("testbench_validated", fr.mode == "static"),
                   gate("verification_passed", fr.mode == "static"),

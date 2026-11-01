@@ -331,7 +331,11 @@ class RoutesApp(App):
         except ValueError as exc:   # RemediationError, or a non-numeric --attempts
             self.notify(str(exc), severity="error", title="Cannot start remediation")
             return
-        listing = "\n".join(f"  #{f.seq:02d} {escape(f.title)} ({escape(f.file or '')}:{f.line})" for f in targets[:8])
+        from routes_core.testplan import vuln_class
+
+        listing = "\n".join(f"  #{f.seq:02d} {escape('[' + vuln_class({'type': f.type, 'rule_id': f.rule_id}) + ']')} "
+                            f"{escape(f.title)} ({escape(f.file or '')}{':' + str(f.line) if f.line else ''})"
+                            for f in targets[:8])
         if len(targets) > 8:
             listing += f"\n  … and {len(targets) - 8} more"
         body = (f"[b]{len(targets)} finding(s)[/b] in {escape(prepared.source.label)}\n{listing}\n\n"
@@ -444,7 +448,7 @@ class RoutesApp(App):
                 + (", and the patch is applied to a temporary copy only." if patch else "."))
         if generated is not None:
             body += (f"\n\n[b]Generated test plan:[/b] {len(plan['tests'])} tests from your latest analysis "
-                     f"({generated.flows_covered} SQL injection flow(s) covered, {generated.flows_skipped} skipped). "
+                     f"({generated.flows_covered} finding(s) covered, {generated.flows_skipped} skipped). "
                      "Use [b]routes testplan[/b] to save and review it.")
         ok = await self.push_screen_wait(ConfirmModal("Run this application in a sandbox?", body,
                                                       yes="Build and run", no="Cancel"))

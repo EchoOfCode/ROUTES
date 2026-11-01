@@ -212,6 +212,27 @@ class TestExpect(_Strict):
     body_not_contains: list[str] = Field(default_factory=list, max_length=50)
     json_equals: dict[str, object] = Field(default_factory=dict)   # top-level key -> value
     max_ms: int | None = Field(default=None, gt=0, le=120_000)
+    # Response headers (names are case-insensitive): each must be present / must not have any of these values.
+    headers_present: list[str] = Field(default_factory=list, max_length=30)
+    header_not: dict[str, list[str]] = Field(default_factory=dict)
+
+    @field_validator("headers_present")
+    @classmethod
+    def _present_names(cls, v: list[str]) -> list[str]:
+        for name in v:
+            if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", name):
+                raise ValueError(f"invalid header name {name!r}")
+        return [n.lower() for n in v]
+
+    @field_validator("header_not")
+    @classmethod
+    def _not_values(cls, v: dict[str, list[str]]) -> dict[str, list[str]]:
+        if len(v) > 30:
+            raise ValueError("too many header expectations")
+        for name, values in v.items():
+            if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", name) or len(values) > 20:
+                raise ValueError(f"invalid header expectation {name!r}")
+        return {k.lower(): [str(x) for x in vals] for k, vals in v.items()}
 
 
 class TestCase(_Strict):

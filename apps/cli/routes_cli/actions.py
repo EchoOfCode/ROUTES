@@ -160,6 +160,7 @@ def generate_test_plan(a: Assessment):
     from routes_core.testplan import generate
 
     routes = list((a.source_result.routes if a.source_result else None) or [])
-    findings = [{"type": f.type, "status": f.status, "file": f.file, "line": f.line, "endpoint": f.endpoint,
+    findings = [{"type": f.type, "rule_id": f.rule_id, "status": f.status, "file": f.file, "line": f.line,
+                 "endpoint": f.endpoint,
                  "method": f.method, "technical_details": f.technical_details or {}} for f in a.findings]
     return generate(routes, findings)

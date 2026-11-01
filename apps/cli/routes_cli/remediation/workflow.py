@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from routes_core.engine import EngineClient
-from routes_core.testplan import generate
+from routes_core.testplan import generate, runtime_check, vuln_class
 from routes_core.verification import BuildVerification, failure_summary, reanalyse, verify_build
 from routes_shared.buildrun import PatchRejected, TestPlan, validate_patch
 from routes_shared.fingerprint import finding_identity, match_reanalysis
@@ -100,6 +100,8 @@ class FindingRun:
     line: int
     fingerprint: str
     max_attempts: int
+    vuln_class: str = ""
+    runtime_check: str | None = None     # what the runtime security test checks; None: rescan only
     stage: str = Stage.QUEUED.value
     stage_history: list[tuple[str, float]] = field(default_factory=list)
     steps: dict[str, Step] = field(default_factory=lambda: {k: Step() for k in STEPS})
@@ -182,11 +184,13 @@ class Workflow:
             id=time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6], source=services.source.label,
             findings=[FindingRun(seq=f.seq, title=f.title, type=f.type, severity=f.severity, rule_id=f.rule_id,
                                  file=f.file or "", line=f.line or 0, fingerprint=f.fingerprint,
-                                 max_attempts=max_attempts) for f in findings],
+                                 max_attempts=max_attempts, vuln_class=vuln_class(_finding_dict(f)))
+                      for f in findings],
             models={"A": services.model_a.model, "B": services.model_b.model})
         self.routes = list((assessment.source_result.routes if assessment.source_result else None) or [])
         self.baseline_identities = {f.fingerprint: finding_identity(_finding_dict(f)) for f in assessment.findings}
         self._client: EngineClient | None = None
+        self.allowed_modules = _project_modules(services.source)
 
     # -------------------------------------------------------------- helpers
     def _changed(self) -> None:
@@ -296,7 +300,7 @@ class Workflow:
             self._check_cancel()
             self._stage(fr, Stage.ANALYSIS)
             self._step(fr, "plan", "running", f"Model A ({self.s.model_a.model}) is analysing the root cause")
-            plan = plan_fix(self.s.model_a, _finding_dict(finding), snap)
+            plan = plan_fix(self.s.model_a, {**_finding_dict(finding), "vuln_class": fr.vuln_class}, snap)
             self._stage(fr, Stage.PLANNING)
             fr.plan = plan.summary()
             self._step(fr, "plan", "done", _short(plan.root_cause or plan.prompt_for_fix, 110)
@@ -342,7 +346,9 @@ class Workflow:
 
     # ------------------------------------------------------------ testbench
     def _testbench(self, finding, fr: FindingRun, plan: FixPlan) -> dict:
-        gen = generate(self.routes, [_finding_dict(finding)])
+        fd = _finding_dict(finding)
+        gen = generate(self.routes, [fd])
+        fr.runtime_check, no_check_reason = runtime_check(fd, self.routes)
         tests = []
         for t in gen.plan["tests"]:
             if t["category"] == "security":
@@ -355,12 +361,13 @@ class Workflow:
         counts = _counts(tests)
         fr.testbench = {"tests": len(tests), **counts, "notes": gen.notes[:5],
                         "rejected_model_tests": plan.rejected_tests}
-        if not counts.get("security"):
-            fr.mode_reason = (f"ROUTES has no runtime security test for {fr.type} findings yet; the static rescan "
-                              "is the loop's security check")
         detail = ", ".join(f"{n} {k}" for k, n in counts.items())
-        self._step(fr, "testbench", "done" if counts.get("security") else "warn",
-                   detail + ("" if counts.get("security") else " · no runtime security test for this finding type"))
+        if counts.get("security"):
+            self._step(fr, "testbench", "done", f"{detail} · runtime check: {fr.runtime_check}")
+        else:
+            fr.mode_reason = f"there is no runtime security test ({no_check_reason})"
+            self._step(fr, "testbench", "warn", f"{detail} · no runtime security test: {no_check_reason}; the "
+                                                "static rescan is the security check")
         return test_plan
 
     # ------------------------------------------------------------- baseline
@@ -430,7 +437,8 @@ class Workflow:
 
             # Model B
             self._astep(a, "patch", "running", f"Model B ({self.s.model_b.model}) is writing the fix")
-            cand = generate_patch(self.s.model_b, plan, snap, previous_failure=previous_failure)
+            cand = generate_patch(self.s.model_b, plan, snap, previous_failure=previous_failure,
+                                  verification=fr.runtime_check, allowed_modules=self.allowed_modules)
             a.candidate_hash = cand.hash
             self._astep(a, "patch", "done", f"{len(cand.code.splitlines())} lines")
 
@@ -448,7 +456,8 @@ class Workflow:
                 self._step(fr, "loop", "failed", f"oscillation after {no} attempt(s)")
                 return
             candidate_file = _replace_region(original_file, snap.start_line, snap.end_line, cand.code)
-            problems = validate_candidate(snap.file, original_file, candidate_file, snap.code, cand.code)
+            problems = validate_candidate(snap.file, original_file, candidate_file, snap.code, cand.code,
+                                          allowed_modules=self.allowed_modules)
             diff = unified_diff(snap.file, snap.start_line, snap.code, cand.code) if not problems else ""
             if not problems:
                 try:
@@ -634,6 +643,21 @@ def _finding_dict(f) -> dict:
             "endpoint": f.endpoint, "method": f.method, "rule_id": f.rule_id, "fingerprint": f.fingerprint,
             "plain_description": f.plain_description, "recommendation": f.recommendation,
             "technical_details": f.technical_details or {}}
+
+
+def _project_modules(source: RemediationSource) -> set[str]:
+    """Packages the project already depends on: importing them is not a new dependency."""
+    import json
+
+    try:
+        pkg = json.loads(source.read("package.json"))
+    except (RemediationSourceError, ValueError, OSError):
+        return set()
+    out: set[str] = set()
+    for key in ("dependencies", "devDependencies", "peerDependencies"):
+        if isinstance(pkg.get(key), dict):
+            out.update(pkg[key])
+    return out
 
 
 def _short(text: str, n: int) -> str:

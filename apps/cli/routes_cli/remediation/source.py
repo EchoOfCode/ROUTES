@@ -19,6 +19,8 @@ from routes_core.sources import SourceError, SourceSpec, classify, pack_director
 from routes_shared.remediation import Snapshot
 
 FALLBACK_CONTEXT_LINES = 15
+IMPORT_HEADER_LINES = 40
+MAX_WHOLE_FILE_LINES = 400
 MAX_SOURCE_FILE_BYTES = 2 * 1024 * 1024
 
 
@@ -84,12 +86,18 @@ class RemediationSource:
         raise RemediationSourceError("Unsupported source.")
 
     def region(self, finding) -> Region:  # noqa: ANN001 - a routes_storage Finding
-        if not finding.file or not finding.line:
-            raise RemediationSourceError("The finding does not point at a line of code.")
+        if not finding.file:
+            raise RemediationSourceError("The finding does not point at a file.")
         content = self.read(finding.file)
         lines = content.replace("\r\n", "\n").split("\n")
         if lines and lines[-1] == "":
             lines = lines[:-1]
+        if not finding.line:
+            # A file-level finding (e.g. missing security headers in next.config): the whole file.
+            if not lines or len(lines) > MAX_WHOLE_FILE_LINES:
+                raise RemediationSourceError(f"{finding.file} is too large to remediate as a whole file.")
+            return Region(Snapshot(file=finding.file, start_line=1, end_line=len(lines), code="\n".join(lines)),
+                          True)
         stored = (finding.technical_details or {}).get("remediation_region") or {}
         start, end = stored.get("start_line"), stored.get("end_line")
         exact = isinstance(start, int) and isinstance(end, int) and 1 <= start <= finding.line <= end <= len(lines)
@@ -99,6 +107,9 @@ class RemediationSource:
         if finding.line > len(lines):
             raise RemediationSourceError(f"{finding.file} has only {len(lines)} lines; the source has changed since "
                                          "the assessment. Run the analysis again.")
+        if 1 < start <= IMPORT_HEADER_LINES:
+            # Include the import block so a fix may import an existing helper (e.g. the auth session).
+            start = 1
         return Region(Snapshot(file=finding.file, start_line=start, end_line=end,
                                code="\n".join(lines[start - 1:end])), exact)
 

@@ -38,6 +38,25 @@ DEFAULT_MODEL_A = "openai/gpt-oss-120b"
 DEFAULT_MODEL_B = "qwen/qwen3-32b"
 MAX_FUNCTIONAL_TESTS = 8
 
+# What a correct fix looks like, per vulnerability class (shown to both models).
+CLASS_GUIDANCE = {
+    "SQL injection": "Pass every request value as a query parameter ($1, $2, ...); never build SQL text from input. "
+                     "Identifiers that must vary come from a fixed allow-list.",
+    "XSS": "Never write request or browser data into HTML unescaped. Escape it for the context it lands in (HTML "
+           "text, attribute, URL), render it as text instead of markup, return JSON with the JSON content type, "
+           "or sanitise with a sanitiser the project already depends on. Do not use dangerouslySetInnerHTML / "
+           "innerHTML with untrusted data.",
+    "Access control": "Authenticate before touching data: read the session at the top of the handler with the "
+                      "project's existing auth helper and return 401 when there is none. For record lookups, put "
+                      "the signed-in user's id in the query itself (WHERE id = $1 AND user_id = $2) and return 404 "
+                      "for someone else's row.",
+    "Misconfiguration": "Use secure settings explicitly: send the missing security headers for every path (Next.js: "
+                        "an async headers() in next.config with source '/:path*'), replace a wildcard CORS origin "
+                        "with an explicit allow-list, set httpOnly/secure/sameSite on session cookies, keep TLS "
+                        "verification on, use strong algorithms and secrets from the environment.",
+}
+LOCAL_MODULE_PREFIXES = (".", "@/", "~/", "#", "/")
+
 
 class LLMError(RuntimeError):
     """A provider call failed or returned something unusable (never papered over)."""
@@ -236,7 +255,10 @@ def _functional(raw_tests, rejected: list[str]) -> list[dict]:
 
 def plan_fix(client: ChatClient, finding: dict, snapshot: Snapshot) -> FixPlan:
     redacted, mapping = redact_for_llm(snapshot.code)
-    user = (f"Finding: {finding.get('title')}\nRule: {finding.get('rule_id')}\n"
+    klass = finding.get("vuln_class") or ""
+    guidance = CLASS_GUIDANCE.get(klass, "Remove the weakness without changing the endpoint's normal behaviour.")
+    user = (f"Finding: {finding.get('title')}\nClass: {klass}\nRule: {finding.get('rule_id')}\n"
+            f"What a correct fix looks like: {guidance}\n"
             f"Endpoint: {finding.get('method') or ''} {finding.get('endpoint') or 'unknown'}\n"
             f"Why it's a problem: {finding.get('plain_description')}\n"
             f"Recommendation: {finding.get('recommendation') or ''}\n"
@@ -247,7 +269,7 @@ def plan_fix(client: ChatClient, finding: dict, snapshot: Snapshot) -> FixPlan:
     prompt = _str(raw, "prompt_for_fix") or _str(raw, "remediation_strategy")
     if not prompt:
         raise LLMError("Model A's plan has no prompt_for_fix.")
-    prompt_redacted, prompt_map = redact_for_llm(prompt)
+    prompt_redacted, prompt_map = redact_for_llm(prompt + f"\n\nGeneral rule for this class: {guidance}")
     rejected: list[str] = []
     return FixPlan(model=client.model, prompt_for_fix=prompt_redacted, redacted_code=redacted,
                    placeholder_map={**mapping, **prompt_map}, secrets_redacted=len(mapping),
@@ -263,7 +285,8 @@ PATCH_SYSTEM_PROMPT = (
     "You are a software engineer fixing a security issue. You will be given instructions and a redacted code "
     "snapshot - secrets are placeholders like <SECRET_1>; copy them through verbatim, never invent a real value.\n\n"
     "Respond with ONLY the complete replacement code for the snapshot, as a single code block. Keep the same "
-    "indentation and style, do not add imports or dependencies, do not add network calls. No prose, no "
+    "indentation and style. Do not add new dependencies: only import the project's own modules or packages it "
+    "already depends on, and imports belong at the top of the file. Do not add network calls. No prose, no "
     "explanation, nothing outside the code block."
 )
 _CODE_FENCE_RE = re.compile(r"```[A-Za-z0-9_+-]*\n(.*?)```", re.DOTALL)
@@ -281,16 +304,26 @@ def candidate_hash(code: str) -> str:
 
 
 def generate_patch(client: ChatClient, plan: FixPlan, snapshot: Snapshot, *,
-                   previous_failure: str | None = None) -> Candidate:
+                   previous_failure: str | None = None, verification: str | None = None,
+                   allowed_modules: set[str] | None = None) -> Candidate:
     mapping = dict(plan.placeholder_map)
     retry = ""
+    if verification:
+        checks = (f"\n\nROUTES will build the patched app in a sandbox and check at runtime that {verification}; "
+                  "then it re-runs the static analysis on the patched code.")
+    else:
+        checks = "\n\nROUTES will re-run the static analysis on the patched code; the finding must be gone."
+    if allowed_modules:
+        checks += f"\nPackages the project already depends on: {', '.join(sorted(allowed_modules)[:60])}."
+    if snapshot.start_line == 1:
+        checks += "\nThe snapshot starts at the top of the file, so imports may be added there."
     if previous_failure:
         failure, failure_map = redact_for_llm(previous_failure)
         mapping.update(failure_map)
         retry = (f"\n\nThe previous attempt was rejected by ROUTES' verification:\n{failure}\n"
                  "Fix exactly that, keep the security fix, and return the full replacement again.")
     user = (f"{plan.prompt_for_fix}\n\nRedacted snapshot to replace (file {snapshot.file}, lines "
-            f"{snapshot.start_line}-{snapshot.end_line}):\n```\n{plan.redacted_code}\n```{retry}")
+            f"{snapshot.start_line}-{snapshot.end_line}):\n```\n{plan.redacted_code}\n```{checks}{retry}")
     raw = _THINK_RE.sub("", client.complete([{"role": "system", "content": PATCH_SYSTEM_PROMPT},
                                              {"role": "user", "content": user}]))
     m = _CODE_FENCE_RE.search(raw)
@@ -335,7 +368,8 @@ def _parses(path: str, content: str) -> bool | None:
     return not Parser(lang).parse(content.encode("utf-8")).root_node.has_error
 
 
-def validate_candidate(file: str, original_file: str, candidate_file: str, original: str, candidate: str) -> list[str]:
+def validate_candidate(file: str, original_file: str, candidate_file: str, original: str, candidate: str, *,
+                       allowed_modules: set[str] | None = None) -> list[str]:
     """Problems that reject a candidate before it reaches a sandbox."""
     problems: list[str] = []
     if not candidate.strip():
@@ -344,7 +378,15 @@ def validate_candidate(file: str, original_file: str, candidate_file: str, origi
         return ["The candidate does not change the vulnerable code."]
     if "<SECRET_" in candidate:
         problems.append("The candidate contains a placeholder that is not part of the original code.")
-    added = sorted(_modules(candidate) - _modules(original))
+    allowed = allowed_modules or set()
+
+    def known(module: str) -> bool:
+        if module.startswith(LOCAL_MODULE_PREFIXES) or module.startswith("node:"):
+            return True
+        root = "/".join(module.split("/")[:2]) if module.startswith("@") else module.split("/")[0]
+        return root in allowed
+
+    added = sorted(m for m in _modules(candidate) - _modules(original) if not known(m))
     if added:
         problems.append(f"The candidate adds new imports or dependencies: {', '.join(added)}.")
     before, after = _network_calls(original), _network_calls(candidate)

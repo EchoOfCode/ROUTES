@@ -59,3 +59,13 @@ def test_evaluate_json_and_timing():
     c = case("/x", json_equals={"a": 1}, max_ms=10)
     outcome, reasons = evaluate(c, 200, json.dumps({"a": 2}), 50, None)
     assert outcome == "failed" and any("expected 1" in r for r in reasons) and any("limit" in r for r in reasons)
+
+
+def test_header_expectations():
+    c = case("/x", headers_present=["Content-Security-Policy", "x-frame-options"],
+             header_not={"Access-Control-Allow-Origin": ["*", "https://probe.example"]})
+    ok = {"content-security-policy": "default-src 'self'", "X-Frame-Options": "DENY"}
+    assert evaluate(c, 200, "", 5, None, ok) == ("passed", [])
+    status, reasons = evaluate(c, 200, "", 5, None, {"Access-Control-Allow-Origin": " * "})
+    assert status == "failed" and len(reasons) == 3
+    assert "'content-security-policy' is missing" in reasons[0] and "'access-control-allow-origin' is '*'" in reasons[2]

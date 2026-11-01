@@ -156,7 +156,24 @@ of `routes_shared.remediation_workflow`. The live view shows the current stage a
    (shown as a warning; re-run the analysis for exact bounds).
 2. **Model A plan.** The region is redacted (`redact_for_llm`) and re-checked before it is sent.
 3. **Testbench.** Security tests come from ROUTES (`routes_core.testplan`), never from a model. Model A may
-   add GET/HEAD functional tests.
+   add GET/HEAD functional tests. The runtime check depends on the class:
+
+   | Class | Finding (rule) | Runtime security test |
+   |---|---|---|
+   | SQL injection | `routes.sqli.*` with a traced input | a quote and a stacked `pg_sleep` in that input: no 5xx, no database error, no delay |
+   | XSS | `routes.xss.reflected-response` | two script markers in the traced input must not come back unescaped |
+   | XSS | `dom-sink-tainted`, `dangerously-set-inner-html` | none (runs in the browser): rescan only |
+   | Access control | `routes.a01.unprotected-db-route` | an anonymous request must get 401/403/404 or a redirect |
+   | Access control | `routes.a01.missing-ownership-check` | none (needs two signed-in users): rescan only |
+   | Misconfiguration | `routes.config.missing-security-headers` | the page must send every missing header |
+   | Misconfiguration | `routes.config.cors-wildcard` | a foreign `Origin` must not be granted (`*` or echoed) |
+   | Misconfiguration | cookies, TLS, `NEXT_PUBLIC_` secrets, `routes.crypto.*` | none: rescan only |
+
+   The view labels every finding with its class and shows which check applies. Findings without a runtime
+   check still go through the loop, but their verdict is at most `inconclusive`. File-level findings (missing
+   headers in `next.config`) use the whole file as the region. A handler within the first 40 lines includes
+   the import block, so a fix may import the project's own modules (for example the auth helper) or packages
+   already in `package.json`. New dependencies are still rejected.
 4. **Baseline.** The original is built and tested in the sandbox. The vulnerability must be reproduced (a
    security test fails). Functional tests that fail on the original are dropped.
 5. **Correction loop**, up to `--attempts` (default 3). Each attempt runs Model B → validation (it changes

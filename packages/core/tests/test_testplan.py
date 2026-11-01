@@ -57,3 +57,50 @@ def test_smoke_tests_cover_static_get_routes_only_and_payloads_are_non_destructi
         assert word not in text
     assert g.plan["health"]["path"] == "/" and 404 in g.plan["health"]["expect_status"]
     assert NUMBER_SLEEP.startswith("1;")
+
+
+# ----------------------------------------------- XSS, access control, configuration
+from routes_core.testplan import CORS_PROBE_ORIGIN, XSS_MARKERS, runtime_check, vuln_class  # noqa: E402
+
+
+def _f(rule, type_, **kw):
+    return {"rule_id": rule, "type": type_, "status": "potential", "file": kw.pop("file", "app/x/route.ts"),
+            "line": kw.pop("line", 4), **kw}
+
+
+def test_reflected_xss_sends_markers_in_the_traced_input():
+    f = _f("routes.xss.reflected-response", "Cross-Site Scripting", endpoint="/api/greet", method="GET",
+           technical_details={"source": {"kind": "query", "name": "name"}})
+    tests = [t for t in generate([], [f]).plan["tests"] if t["category"] == "security"]
+    assert [t["request"]["query"]["name"] for t in tests] == XSS_MARKERS
+    assert all(t["expect"]["body_not_contains"] == [t["request"]["query"]["name"]] for t in tests)
+    assert vuln_class(f) == "XSS" and runtime_check(f)[0].startswith("script markers")
+
+
+def test_unprotected_route_expects_an_anonymous_request_to_be_rejected():
+    f = _f("routes.a01.unprotected-db-route", "Broken Access Control", endpoint="/api/orders/[id]", method="DELETE")
+    (t,) = [t for t in generate([], [f]).plan["tests"] if t["category"] == "security"]
+    assert t["request"] == {"method": "DELETE", "path": "/api/orders/1"} and 401 in t["expect"]["status"]
+    assert 200 not in t["expect"]["status"] and vuln_class(f) == "Access control"
+
+
+def test_missing_headers_and_cors_become_header_checks():
+    hdr = _f("routes.config.missing-security-headers", "Insecure Configuration", file="next.config.js", line=None,
+             technical_details={"missing_headers": ["content-security-policy", "x-frame-options"]})
+    cors = _f("routes.config.cors-wildcard", "Insecure Configuration", file="app/api/items/route.ts")
+    plan = generate([{"path": "/api/items", "methods": ["GET"], "file": "app/api/items/route.ts"}], [hdr, cors]).plan
+    sec = {t["id"].split("-")[0]: t for t in plan["tests"] if t["category"] == "security"}
+    assert sec["hdr"]["expect"]["headers_present"] == ["content-security-policy", "x-frame-options"]
+    assert sec["cors"]["request"] == {"method": "GET", "path": "/api/items", "headers": {"Origin": CORS_PROBE_ORIGIN}}
+    assert sec["cors"]["expect"]["header_not"]["access-control-allow-origin"] == ["*", CORS_PROBE_ORIGIN]
+    assert vuln_class(hdr) == vuln_class(cors) == "Misconfiguration"
+
+
+def test_findings_without_an_http_observable_effect_get_a_reason_not_a_test():
+    for rule, type_ in (("routes.xss.dangerously-set-inner-html", "Cross-Site Scripting"),
+                        ("routes.a01.missing-ownership-check", "Broken Access Control"),
+                        ("routes.config.insecure-cookie", "Insecure Configuration")):
+        gen = generate([], [_f(rule, type_, endpoint="/api/x")])
+        assert not [t for t in gen.plan["tests"] if t["category"] == "security"]
+        check, why = runtime_check(_f(rule, type_, endpoint="/api/x"))
+        assert check is None and why and any(why in note for note in gen.notes)

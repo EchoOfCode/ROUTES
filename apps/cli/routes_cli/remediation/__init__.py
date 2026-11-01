@@ -26,8 +26,8 @@ class RemediationError(ValueError):
 
 
 def actionable(assessment) -> list:  # noqa: ANN001
-    """Findings that point at a line of code (the ones a patch can address)."""
-    return [f for f in assessment.findings if f.file and f.line]
+    """Findings that point at code (a line, or a whole file such as next.config): the ones a patch can address."""
+    return [f for f in assessment.findings if f.file]
 
 
 def select(assessment, ids: list[str] | None) -> list:  # noqa: ANN001
@@ -43,8 +43,8 @@ def select(assessment, ids: list[str] | None) -> list:  # noqa: ANN001
             f = next((x for x in assessment.findings if part.lstrip("0") == str(x.seq)), None)
             if f is None:
                 raise RemediationError(f"No finding {part} in assessment {assessment.id[:8]}.")
-            if not (f.file and f.line):
-                raise RemediationError(f"Finding #{f.seq:02d} does not point at a line of code, so it cannot be "
+            if not f.file:
+                raise RemediationError(f"Finding #{f.seq:02d} does not point at a file, so it cannot be "
                                        "patched.")
             if f not in out:
                 out.append(f)
