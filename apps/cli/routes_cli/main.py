@@ -745,6 +745,7 @@ def _offer_remediation(ctx: Context, a) -> None:
 @app.command()
 def remediate(ids: Optional[list[str]] = typer.Argument(None, help="Finding numbers, e.g. 01 03 (default: choose "
                                                                      "interactively, or all with --all)"),
+              id: Optional[str] = typer.Option(None, "--id", "-f", help="Finding sequence number (e.g. 02) to remediate"),
               all_findings: bool = typer.Option(False, "--all", help="Every code finding of the assessment"),
               attempts: int = typer.Option(3, "--attempts", "-n", help="Patch attempts per finding (1-10)"),
               source: Optional[str] = typer.Option(None, "--source", "-s",
@@ -774,14 +775,17 @@ def remediate(ids: Optional[list[str]] = typer.Argument(None, help="Finding numb
     if a is None or not a.findings:
         _fail("No findings to remediate. Run `routes analyze <source>` first.")
     try:
-        if ids or all_findings:
-            targets = select(a, ids if ids and not all_findings else None)
+        target_ids = list(ids or [])
+        if id and id not in target_ids:
+            target_ids.append(id)
+        if target_ids or all_findings:
+            targets = select(a, target_ids if target_ids and not all_findings else None)
         elif interactive() and not as_json:
             targets = _pick_findings(_console(), a)
             if not targets:
                 raise typer.Exit(2)
         else:
-            _fail("Give finding numbers or --all.")
+            _fail("Give finding numbers, --id <number>, or --all.")
     except RemediationError as exc:
         _fail(str(exc))
     raise typer.Exit(_run_remediation(ctx, a, targets, source=source, attempts=attempts, output=output,

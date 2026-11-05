@@ -8,6 +8,8 @@ import time
 
 from rich.console import Group, RenderableType
 from rich.markup import escape
+from rich.panel import Panel
+from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
@@ -164,6 +166,30 @@ def summary(run: RemediationRun, g: Glyphs, saved=None) -> RenderableType:
         parts.append(Text.from_markup(f"[muted]#{fr.seq:02d}[/] {escape(fr.reason)}"))
     if run.combined.status not in ("skipped",):
         parts.append(Text.from_markup(f"[muted]Combined:[/] {escape(run.combined.detail)}"))
+
+    diff_text = ""
+    if saved is not None and saved.combined and saved.combined.exists():
+        try:
+            diff_text = saved.combined.read_text("utf-8")
+        except OSError:
+            pass
+    if not diff_text and run.combined_patch:
+        diff_text = run.combined_patch
+    if not diff_text:
+        for fr in run.findings:
+            if fr.accepted_patch:
+                diff_text = fr.accepted_patch
+                break
+            for att in reversed(fr.attempts):
+                if att.patch:
+                    diff_text = att.patch
+                    break
+
+    if diff_text and diff_text.strip():
+        parts.append(Text(""))
+        parts.append(Panel(Syntax(diff_text.strip(), "diff", theme="monokai", line_numbers=True),
+                           title="[bold green]Patch Preview (unified diff)[/]", expand=False))
+
     if saved is not None:
         parts.append(Text(""))
         if saved.combined:
