@@ -5,7 +5,7 @@ export default {
     extend: {
       colors: {
         acid: '#FF3333', // Main Red theme
-        cyan: '#1E60FF', // Secondary Blue theme
+        cyan: '#1CE3D6', // Electric Cyan
         paper: '#F2EFE9',
         kraft: '#9E9A8E',
         kraftDark: '#7C786D',

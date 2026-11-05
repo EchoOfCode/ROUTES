@@ -118,9 +118,9 @@
           <line x1="124" y1="95" x2="136" y2="95" stroke="#F2EFE9" stroke-width="3"></line>
           <!-- Endpoint ↔ Code mapping graph -->
           <path d="M75,245 L95,205 L130,225 L165,198 L182,245" fill="none" stroke="#FF3333" stroke-width="3.5" stroke-linecap="square"></path>
-          <circle cx="95" cy="205" r="5" fill="#1E60FF"></circle>
+          <circle cx="95" cy="205" r="5" fill="#1CE3D6"></circle>
           <circle cx="130" cy="225" r="5" fill="#FF3333"></circle>
-          <circle cx="165" cy="198" r="5" fill="#1E60FF"></circle>
+          <circle cx="165" cy="198" r="5" fill="#1CE3D6"></circle>
         </svg>
 
         <!-- Small Red Torn Corner Tag -->
@@ -137,7 +137,7 @@
       <svg class="absolute inset-0 w-full h-full pointer-events-none opacity-65" viewBox="0 0 400 220">
         <path d="M10,190 Q90,40 180,140 T370,60" fill="none" stroke="#F2EFE9" stroke-width="2" stroke-dasharray="6 4"></path>
         <circle cx="180" cy="140" r="6" fill="#FF3333" stroke="#181818" stroke-width="2"></circle>
-        <circle cx="370" cy="60" r="6" fill="#1E60FF" stroke="#181818" stroke-width="2"></circle>
+        <circle cx="370" cy="60" r="6" fill="#1CE3D6" stroke="#181818" stroke-width="2"></circle>
       </svg>
       <!-- Dark charcoal stamp badge at bottom -->
       <div class="relative z-10 bg-[#3B3A36] text-paper torn-box-jagged px-5 py-4 rotate-[-6deg] cutout-shadow border border-xerox">
@@ -148,10 +148,10 @@
 
     <!-- BOTTOM-RIGHT ELECTRIC CYAN LIVE ASSESSMENT TRACE LOG + HALFTONE MAINTAINER -->
     <div class="lg:col-span-4 grid grid-cols-1 sm:grid-cols-12 relative min-h-[300px]">
-      <!-- Electric Blue Transcript / Assessment Trace Log Strip -->
-      <div class="sm:col-span-7 bg-cyan torn-box-jagged p-5 sm:p-6 flex flex-col justify-end relative z-20 cutout-shadow text-paper">
-        <div class="mb-2 flex items-center justify-between border-b border-paper/30 pb-1">
-          <span class="font-mono text-[10px] font-bold uppercase tracking-wider text-paper">ASSESSMENT TRACE //</span>
+      <!-- Electric Cyan Transcript / Assessment Trace Log Strip -->
+      <div class="sm:col-span-7 bg-cyan torn-box-jagged p-5 sm:p-6 flex flex-col justify-end relative z-20 cutout-shadow">
+        <div class="mb-2 flex items-center justify-between border-b border-xerox/30 pb-1">
+          <span class="font-mono text-[10px] font-bold uppercase tracking-wider">ASSESSMENT TRACE //</span>
           <button
             id="stepTraceBtn"
             type="button"
@@ -162,7 +162,7 @@
         </div>
 
         <!-- Timestamped Assessment Log -->
-        <div id="heroTraceContainer" class="space-y-2 font-mono text-xs leading-snug text-paper" aria-live="polite">
+        <div id="heroTraceContainer" class="space-y-2 font-mono text-xs leading-snug text-xerox" aria-live="polite">
           <div class="grid grid-cols-12 gap-1 items-baseline">
             <span class="col-span-3 text-[11px] opacity-75">09:42</span>
             <span class="col-span-2 font-bold">INIT</span>
@@ -422,13 +422,13 @@
           let radius = 2.8;
 
           if (dist < 40) {
-            color = '#1E60FF'; // Blue center
+            color = '#1CE3D6'; // Cyan center
             radius = 3.2;
           } else if (rayWave > 0.72) {
             color = '#181818'; // Xerox black rays
             radius = 3.2;
           } else if (rayWave < -0.52) {
-            color = '#1E60FF'; // Blue rays
+            color = '#1CE3D6'; // Cyan rays
             radius = 3.0;
           } else if (Math.sin(angle * 22 + dist * 0.04) > 0.45) {
             color = '#9E9A8E'; // Kraft grey midtones

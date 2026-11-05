@@ -42,7 +42,7 @@ body {
   background-size: 6px 6px;
 }
 .halftone-cyan {
-  background-image: radial-gradient(#1E60FF 2px, transparent 2px);
+  background-image: radial-gradient(#1CE3D6 2px, transparent 2px);
   background-size: 8px 8px;
 }
 .halftone-kraft {

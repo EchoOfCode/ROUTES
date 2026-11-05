@@ -74,25 +74,25 @@
       </div>
 
       <!-- Cutout 03: ISOLATED ASSESSMENT -->
-      <div class="bg-cyan text-paper torn-box-jagged p-7 cutout-shadow -rotate-1 flex flex-col justify-between border border-xerox">
+      <div class="bg-cyan torn-box-jagged p-7 cutout-shadow -rotate-1 flex flex-col justify-between border border-xerox">
         <div>
           <div class="flex items-center justify-between mb-5">
-            <span class="font-abstract text-3xl text-paper">03 //</span>
-            <span class="bg-xerox text-cyan font-mono text-xs px-2 py-0.5">ISOLATION</span>
+            <span class="font-abstract text-3xl text-xerox">03 //</span>
+            <span class="bg-xerox text-paper font-mono text-xs px-2 py-0.5">ISOLATION</span>
           </div>
-          <h3 class="font-typewriter text-2xl sm:text-3xl text-paper mb-3 leading-snug">
+          <h3 class="font-typewriter text-2xl sm:text-3xl text-xerox mb-3 leading-snug">
             Disposable Sandboxes &amp; Network Gateways.
           </h3>
-          <p class="font-mono text-xs sm:text-sm text-paper/90 leading-relaxed mb-4">
+          <p class="font-mono text-xs sm:text-sm text-xerox/90 leading-relaxed mb-4">
             Every assessment executes inside ephemeral, non-root (UID 10001) containers with read-only root filesystems, dropped capabilities (<code class="bg-xerox text-cyan px-1">CapDrop: ALL</code>), and size-capped <code class="bg-xerox text-cyan px-1">noexec</code> tmpfs. Egress passes solely through a policy gateway blocking RFC 1918, link-local, loopback, and cloud metadata.
           </p>
-          <div class="bg-black/20 p-2 font-mono text-[11px] space-y-1 text-paper/90">
+          <div class="bg-xerox/10 p-2 font-mono text-[11px] space-y-1">
             <div>• Proxy: Filtered Docker API socket</div>
             <div>• Network: Internal per-run subnets</div>
             <div>• Cleanup: Mandatory orphan teardown</div>
           </div>
         </div>
-        <div class="mt-8 pt-4 border-t border-paper/30 font-mono text-xs font-bold flex justify-between text-paper">
+        <div class="mt-8 pt-4 border-t border-xerox/30 font-mono text-xs font-bold flex justify-between">
           <span>ISOLATION: FAIL-CLOSED</span>
           <span>[✓]</span>
         </div>
