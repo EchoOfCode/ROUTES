@@ -1,0 +1,32 @@
+---
+// TerminalSection.astro - Fold 03: Interactive ROUTES Terminal Workbench
+import { TerminalDemo } from '../interactive/TerminalDemo';
+---
+
+<section id="terminal" class="relative py-16 sm:py-24 px-4 sm:px-8 border-b-4 border-xerox xerox-grid-dark">
+  <div class="max-w-7xl mx-auto">
+    <!-- Section Heading with Radical Mixed Type -->
+    <div class="flex flex-col md:flex-row md:items-end justify-between mb-12 gap-6">
+      <div>
+        <span class="bg-xerox text-cyan font-mono text-xs font-bold px-3 py-1 inline-block mb-3 -rotate-1">
+          INTERACTIVE ZINE MODULE // 02
+        </span>
+        <h2 class="font-typewriter text-4xl sm:text-6xl text-xerox leading-none">
+          ROUTES <span class="bg-acid px-3 inline-block rotate-1 font-abstract">TERMINAL</span> Bench.
+        </h2>
+      </div>
+      <div class="max-w-md bg-paper p-4 border-2 border-xerox cutout-shadow-sm font-mono text-xs sm:text-sm text-xerox/85">
+        <p class="mb-2">
+          Experience the developer workflow. Run simulated commands below or click presets to inspect website discovery, Next.js App Router tree-sitter extraction, and intra-procedural SQL injection taint tracking.
+        </p>
+        <span class="bg-xerox text-acid text-[10px] font-bold px-1.5 py-0.5 uppercase">
+          * SIMULATED ENVIRONMENT · SAFE PREDEFINED EVIDENCE
+        </span>
+      </div>
+    </div>
+
+    <!-- React Interactive Component -->
+    <TerminalDemo client:load />
+  </div>
+</section>
+

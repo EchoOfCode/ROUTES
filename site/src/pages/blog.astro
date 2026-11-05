@@ -1,0 +1,46 @@
+---
+// blog.astro - ROUTES Blog (Blank Placeholder)
+import Layout from '../layouts/Layout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+---
+
+<Layout
+  title="ROUTES — Blog"
+  description="Security field notes, engine dispatches, and research updates from ROUTES."
+>
+  <Header />
+
+  <main class="min-h-[78vh] bg-[#DCD8CF] xerox-grid-dark flex items-center justify-center p-4 sm:p-8">
+    <div class="w-full max-w-2xl my-12">
+      <!-- Blank Zine Card -->
+      <article class="bg-paper torn-card-main p-8 sm:p-14 cutout-shadow border-2 border-xerox text-center relative">
+        <div class="inline-block mb-6">
+          <span class="bg-xerox text-acid font-mono text-xs font-bold px-3 py-1 border border-xerox uppercase tracking-wider">
+            DISPATCH ARCHIVE // 204_NO_CONTENT
+          </span>
+        </div>
+
+        <h1 class="font-typewriter text-4xl sm:text-5xl text-xerox leading-tight mb-4">
+          ROUTES <span class="bg-acid px-3 inline-block rotate-1 font-abstract">BLOG.</span>
+        </h1>
+
+        <p class="font-mono text-sm sm:text-base text-xerox/80 max-w-md mx-auto mb-8 leading-relaxed">
+          No dispatches or field notes published yet. This archive is blank for now.
+        </p>
+
+        <div class="pt-4 border-t-2 border-xerox/20 flex justify-center">
+          <a
+            href="/"
+            class="bg-kraft hover:bg-acid text-xerox font-mono font-bold text-sm px-6 py-3.5 torn-button cutout-shadow-sm border-2 border-xerox inline-flex items-center gap-2 transition-none"
+          >
+            <span>← RETURN HOME</span>
+          </a>
+        </div>
+      </article>
+    </div>
+  </main>
+
+  <Footer />
+</Layout>
+

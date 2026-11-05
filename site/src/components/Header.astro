@@ -1,0 +1,40 @@
+---
+// Header.astro - Top zine bar & navigation
+---
+
+<header class="w-full bg-xerox text-paper border-b-2 border-xerox px-3 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs font-mono tracking-wider z-50 relative">
+  <div class="flex items-center gap-3">
+    <a href="/" class="font-bold text-sm text-acid hover:text-paper font-mono transition-none">
+      ROUTES
+    </a>
+  </div>
+
+  <nav class="flex flex-wrap items-center gap-3 sm:gap-6" aria-label="Main Navigation">
+    <a href="/#manifesto" class="hover:text-acid underline decoration-dashed underline-offset-4 transition-none">
+      01.MANIFESTO
+    </a>
+    <a href="/#terminal" class="hover:text-cyan underline decoration-dashed underline-offset-4 transition-none">
+      02.TERMINAL
+    </a>
+    <a href="/#architecture" class="hover:text-acid underline decoration-dashed underline-offset-4 transition-none">
+      03.ARCHITECTURE
+    </a>
+    <a href="/#roadmap" class="hover:text-cyan underline decoration-dashed underline-offset-4 transition-none">
+      04.ROADMAP
+    </a>
+    <a href="/#team" class="hover:text-acid underline decoration-dashed underline-offset-4 transition-none">
+      05.TEAM
+    </a>
+    <a href="/blog" class="hover:text-cyan underline decoration-dashed underline-offset-4 transition-none">
+      06.BLOG
+    </a>
+    <a
+      href="https://github.com/EchoOfCode/ROUTES"
+      target="_blank"
+      rel="noopener noreferrer"
+      class="bg-paper text-xerox font-bold px-2.5 py-0.5 hover:bg-acid transition-none"
+    >
+      [GITHUB ↗]
+    </a>
+  </nav>
+</header>

@@ -1,0 +1,137 @@
+---
+// Footer.astro - Closing Paper Banner and Zine Footer
+---
+
+<!-- FINAL CTA / GITHUB CALLOUT BANNER -->
+<section class="py-16 sm:py-24 px-4 sm:px-8 bg-[#DCD8CF] relative overflow-hidden">
+  <div class="max-w-7xl mx-auto">
+    <div class="bg-paper torn-card-main p-8 sm:p-14 cutout-shadow border-2 border-xerox relative">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+        <div class="lg:col-span-7">
+          <span class="bg-kraft text-xerox font-mono text-xs font-bold px-2.5 py-1 inline-block mb-3">
+            OPEN SOURCE SECURITY // GITHUB.COM/ECHOOFCODE/ROUTES
+          </span>
+          <h2 class="font-typewriter text-3xl sm:text-5xl md:text-6xl text-xerox leading-tight mb-4">
+            YOUR CODE.<br />
+            YOUR SURFACE.<br />
+            <span class="brush-highlight-grey">YOUR SECURITY.</span>
+          </h2>
+          <p class="font-mono text-xs sm:text-sm text-xerox/80 max-w-xl leading-relaxed">
+            Start exploring ROUTES, inspect the source and contribute to the evolution of an independent application security project. Local-first discovery, intra-procedural taint tracking, and isolated assessment environments.
+          </p>
+
+          <!-- Documentation Links -->
+          <div class="mt-6 flex flex-wrap items-center gap-4 text-xs font-mono">
+            <a
+              href="https://github.com/EchoOfCode/ROUTES#quick-start"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="underline decoration-dashed hover:text-acid transition-none"
+            >
+              [INSTALLATION GUIDE ↗]
+            </a>
+            <a
+              href="https://github.com/EchoOfCode/ROUTES/tree/main/docs"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="underline decoration-dashed hover:text-acid transition-none"
+            >
+              [DOCUMENTATION ↗]
+            </a>
+            <a
+              href="https://github.com/EchoOfCode/ROUTES/blob/main/docs/CLI.md"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="underline decoration-dashed hover:text-acid transition-none"
+            >
+              [CLI MANUAL ↗]
+            </a>
+            <a
+              href="/blog"
+              class="underline decoration-dashed hover:text-cyan transition-none"
+            >
+              [BLOG ↗]
+            </a>
+          </div>
+        </div>
+
+        <div class="lg:col-span-5 flex flex-col items-stretch sm:items-end justify-center gap-4">
+          <!-- Quick git clone copy box -->
+          <button
+            id="copyCloneBtn"
+            type="button"
+            class="w-full sm:w-auto bg-xerox text-paper font-mono text-xs sm:text-sm px-4 py-4 text-left flex items-center justify-between gap-4 border-2 border-xerox hover:bg-acid hover:text-xerox transition-none cursor-pointer"
+            title="Click to copy clone command"
+          >
+            <span class="truncate">git clone https://github.com/EchoOfCode/ROUTES.git</span>
+            <span id="copyCloneLabel" class="bg-acid text-xerox px-2 py-0.5 text-[10px] font-bold shrink-0">
+              COPY
+            </span>
+          </button>
+
+          <a
+            href="https://github.com/EchoOfCode/ROUTES"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="w-full sm:w-auto bg-acid hover:bg-cyan text-xerox font-mono font-bold text-sm px-8 py-4 text-center border-2 border-xerox cutout-shadow-sm shrink-0 transition-none"
+          >
+            EXPLORE GITHUB ↗
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer class="bg-xerox text-paper py-8 px-4 sm:px-8 border-t-4 border-xerox font-mono text-xs">
+  <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+    <div class="flex flex-wrap items-center gap-3">
+      <span class="bg-acid text-xerox font-bold px-2 py-0.5 select-none">ROUTES</span>
+      <span>ROUTES — Application security assessment tool for developers.</span>
+    </div>
+    <div class="flex flex-wrap items-center gap-4 sm:gap-6">
+      <a
+        href="https://github.com/EchoOfCode/ROUTES"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="text-cyan hover:underline"
+      >
+        github.com/EchoOfCode/ROUTES
+      </a>
+      <span class="text-kraft select-none"></span>
+    </div>
+  </div>
+</footer>
+
+<!-- COPY TO CLIPBOARD SCRIPT -->
+<script>
+  const copyCloneBtn = document.getElementById('copyCloneBtn');
+  const copyCloneLabel = document.getElementById('copyCloneLabel');
+
+  if (copyCloneBtn && copyCloneLabel) {
+    copyCloneBtn.addEventListener('click', async function () {
+      const text = 'git clone https://github.com/EchoOfCode/ROUTES.git';
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const textarea = document.createElement('textarea');
+          textarea.value = text;
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textarea);
+        }
+        copyCloneLabel.textContent = 'COPIED!';
+        setTimeout(function () {
+          copyCloneLabel.textContent = 'COPY';
+        }, 1600);
+      } catch (err) {
+        copyCloneLabel.textContent = 'READY';
+      }
+    });
+  }
+</script>

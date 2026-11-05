@@ -1,0 +1,62 @@
+---
+// 404.astro - Standard Analog Zine 404 Page
+import Layout from '../layouts/Layout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+---
+
+<Layout
+  title="404 — Dead End // ROUTES"
+  description="404 - The requested route does not exist on this surface."
+>
+  <Header />
+
+  <main class="min-h-[78vh] bg-[#DCD8CF] xerox-grid-dark flex items-center justify-center p-4 sm:p-8">
+    <div class="w-full max-w-2xl my-12">
+      <!-- 404 Torn Card -->
+      <article class="bg-paper torn-card-main p-8 sm:p-14 cutout-shadow border-2 border-xerox text-center relative">
+        <div class="inline-block mb-6">
+          <span class="bg-acid text-xerox font-mono text-xs font-bold px-3 py-1 border border-xerox uppercase tracking-wider">
+            ERROR // 404_NOT_FOUND
+          </span>
+        </div>
+
+        <h1 class="font-typewriter text-5xl sm:text-6xl text-xerox leading-tight mb-6">
+          404<br />
+          <span class="brush-highlight-grey">DEAD END.</span>
+        </h1>
+
+        <!-- Simulated Probe Trace Box -->
+        <div class="bg-xerox text-paper p-4 font-mono text-left text-xs sm:text-sm max-w-md mx-auto mb-8 border-2 border-xerox cutout-shadow-sm">
+          <div class="text-acid font-bold mb-2">$ routes probe request_path</div>
+          <div class="text-[#FF6B6B]">[!] STATUS: 404_NO_LEAF_FOUND</div>
+          <div class="text-kraft">[!] TRACE: Unmapped surface coordinate</div>
+          <div class="text-cyan mt-1">[✓] SANDBOX: Fail-closed boundary intact</div>
+        </div>
+
+        <p class="font-mono text-xs sm:text-sm text-xerox/80 max-w-md mx-auto mb-8 leading-relaxed">
+          The endpoint or page you requested does not exist on this surface. Return to the main zine to explore the security assessment tool.
+        </p>
+
+        <!-- CTAs -->
+        <div class="pt-4 border-t-2 border-xerox/20 flex flex-wrap items-center justify-center gap-4">
+          <a
+            href="/"
+            class="bg-kraft hover:bg-acid text-xerox font-mono font-bold text-sm px-6 py-3.5 torn-button cutout-shadow-sm border-2 border-xerox inline-flex items-center gap-2 transition-none"
+          >
+            <span>← RETURN HOME</span>
+          </a>
+          <a
+            href="/#terminal"
+            class="bg-paper hover:bg-cyan text-xerox font-mono font-bold text-sm px-6 py-3 border-2 border-xerox cutout-shadow-sm inline-flex items-center gap-2 transition-none"
+          >
+            <span>TEST TERMINAL BENCH</span>
+          </a>
+        </div>
+      </article>
+    </div>
+  </main>
+
+  <Footer />
+</Layout>
+

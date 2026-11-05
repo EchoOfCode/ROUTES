@@ -1,0 +1,186 @@
+---
+// Architecture.astro - Fold 04: Three Feature Cutouts + Architecture Diagram
+---
+
+<section id="architecture" class="py-16 sm:py-24 px-4 sm:px-8 bg-[#D8D4C8] relative overflow-hidden border-b-4 border-xerox">
+  <div class="max-w-7xl mx-auto">
+
+    <!-- Section Title -->
+    <div class="mb-14 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b-4 border-xerox pb-6">
+      <div>
+        <span class="bg-xerox text-acid font-mono text-xs font-bold px-3 py-1 inline-block mb-2 -rotate-1">
+          ZINE SECTION // 03
+        </span>
+        <h2 class="abstract-stretch text-3xl sm:text-5xl uppercase text-xerox">
+          THREE PILLARS OF <span class="bg-cyan px-2">ISOLATED</span> AUDITING
+        </h2>
+      </div>
+      <span class="font-scrawl text-sm text-xerox -rotate-2 shrink-0">
+        cut &amp; verified from the engine →
+      </span>
+    </div>
+
+    <!-- 3 Zine Cutout Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+
+      <!-- Cutout 01: SURFACE DISCOVERY -->
+      <div class="bg-acid torn-box-jagged p-7 cutout-shadow -rotate-1 flex flex-col justify-between border border-xerox">
+        <div>
+          <div class="flex items-center justify-between mb-5">
+            <span class="font-abstract text-3xl text-xerox">01 //</span>
+            <span class="bg-xerox text-acid font-mono text-xs px-2 py-0.5">DISCOVERY</span>
+          </div>
+          <h3 class="font-typewriter text-2xl sm:text-3xl text-xerox mb-3 leading-snug">
+            Surface Discovery &amp; Exposure Mapping.
+          </h3>
+          <p class="font-mono text-xs sm:text-sm text-xerox/85 leading-relaxed mb-4">
+            Discover publicly accessible pages, forms, endpoints, and technology stacks. Breadth-first crawler (up to 25 HTML pages), robots.txt and sitemap inspection, form parameter extraction, JavaScript bundle analysis (≤30 bundles), and selective Playwright Chromium rendering for client-rendered shells (≤8 per run).
+          </p>
+          <div class="bg-xerox/10 p-2 font-mono text-[11px] space-y-1">
+            <div>• Target: Hostname-locked scope</div>
+            <div>• Heuristics: Sign-in &amp; OpenAPI probing</div>
+            <div>• Evidence: Preserved with detection logs</div>
+          </div>
+        </div>
+        <div class="mt-8 pt-4 border-t border-xerox/30 font-mono text-xs font-bold flex justify-between">
+          <span>SURFACE: PUBLIC PERIMETER</span>
+          <span>[✓]</span>
+        </div>
+      </div>
+
+      <!-- Cutout 02: SOURCE INTELLIGENCE -->
+      <div class="bg-paper torn-card-main p-7 cutout-shadow rotate-1 flex flex-col justify-between border border-xerox">
+        <div>
+          <div class="flex items-center justify-between mb-5">
+            <span class="font-abstract text-3xl text-xerox">02 //</span>
+            <span class="bg-cyan text-xerox font-mono text-xs font-bold px-2 py-0.5">SOURCE RECON</span>
+          </div>
+          <h3 class="font-typewriter text-2xl sm:text-3xl text-xerox mb-3 leading-snug">
+            Source Intelligence &amp; Taint Tracking.
+          </h3>
+          <p class="font-mono text-xs sm:text-sm text-xerox/85 leading-relaxed mb-4">
+            Inspect source repositories without running untrusted code. Safe archive extraction into <code class="bg-[#E6E2D8] px-1">noexec</code> tmpfs, tree-sitter AST parsing for Next.js App and Pages Router handlers, Semgrep offline security rules, and custom intra-procedural Python taint tracking into PostgreSQL (<code class="bg-[#E6E2D8] px-1">pg</code>) database sinks.
+          </p>
+          <div class="bg-xerox/5 p-2 font-mono text-[11px] space-y-1">
+            <div>• Stack: Next.js + TypeScript + pg</div>
+            <div>• Taint: Request input to SQL sinks</div>
+            <div>• Findings: Potential &amp; Inconclusive only</div>
+          </div>
+        </div>
+        <div class="mt-8 pt-4 border-t border-xerox/30 font-mono text-xs font-bold flex justify-between">
+          <span>CODE: INTRA-PROCEDURAL</span>
+          <span>[✓]</span>
+        </div>
+      </div>
+
+      <!-- Cutout 03: ISOLATED ASSESSMENT -->
+      <div class="bg-cyan text-paper torn-box-jagged p-7 cutout-shadow -rotate-1 flex flex-col justify-between border border-xerox">
+        <div>
+          <div class="flex items-center justify-between mb-5">
+            <span class="font-abstract text-3xl text-paper">03 //</span>
+            <span class="bg-xerox text-cyan font-mono text-xs px-2 py-0.5">ISOLATION</span>
+          </div>
+          <h3 class="font-typewriter text-2xl sm:text-3xl text-paper mb-3 leading-snug">
+            Disposable Sandboxes &amp; Network Gateways.
+          </h3>
+          <p class="font-mono text-xs sm:text-sm text-paper/90 leading-relaxed mb-4">
+            Every assessment executes inside ephemeral, non-root (UID 10001) containers with read-only root filesystems, dropped capabilities (<code class="bg-xerox text-cyan px-1">CapDrop: ALL</code>), and size-capped <code class="bg-xerox text-cyan px-1">noexec</code> tmpfs. Egress passes solely through a policy gateway blocking RFC 1918, link-local, loopback, and cloud metadata.
+          </p>
+          <div class="bg-black/20 p-2 font-mono text-[11px] space-y-1 text-paper/90">
+            <div>• Proxy: Filtered Docker API socket</div>
+            <div>• Network: Internal per-run subnets</div>
+            <div>• Cleanup: Mandatory orphan teardown</div>
+          </div>
+        </div>
+        <div class="mt-8 pt-4 border-t border-paper/30 font-mono text-xs font-bold flex justify-between text-paper">
+          <span>ISOLATION: FAIL-CLOSED</span>
+          <span>[✓]</span>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- FULL-WIDTH ARCHITECTURE & ISOLATION BANNER -->
+    <div class="mt-16 bg-xerox text-paper p-8 sm:p-12 cutout-shadow-hard border-2 border-xerox relative">
+      <div class="flex items-center justify-between border-b border-paper/20 pb-4 mb-8">
+        <div>
+          <span class="bg-acid text-xerox font-mono text-xs font-bold px-2.5 py-1 inline-block mb-1">
+            ENGINE BLUEPRINT // LOCAL-FIRST ARCHITECTURE
+          </span>
+          <h3 class="font-typewriter text-2xl sm:text-4xl text-paper">
+            Strict Sandboxing &amp; Security Boundaries
+          </h3>
+        </div>
+        <span class="hidden sm:inline font-mono text-xs text-kraft">
+          CONTAINER ISOLATION SPEC v0.2.0
+        </span>
+      </div>
+
+      <!-- Architecture Diagram (Mermaid-style ASCII / Grid) -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start font-mono text-xs">
+        
+        <!-- Left: Textual Flow -->
+        <div class="lg:col-span-7 bg-[#21211F] p-6 border border-paper/20 space-y-4">
+          <div class="text-acid font-bold text-sm border-b border-paper/10 pb-2">
+            ASSESSMENT WORKFLOW (STATIC &amp; DISCOVERY)
+          </div>
+
+          <pre class="overflow-x-auto text-[11px] sm:text-xs leading-relaxed text-paper/90 whitespace-pre"><code>ROUTES CLI (Typer · Textual · Rich)
+    │ 127.0.0.1:8190 [TOKEN AUTH]
+    ▼
+SANDBOX MANAGER
+    │
+    ├─► DOCKER API PROXY [DEFAULT-DENY] ─► Docker Engine
+    │
+    ├─► DISCOVERY SANDBOX [UID 10001, Read-Only, tmpfs noexec]
+    │        └─ Crawl ≤25 pages · Forms · JS Bundles · Playwright
+    │
+    ├─► SOURCE ANALYZER [UID 10001, Read-Only, tmpfs noexec]
+    │        └─ Tree-sitter · Semgrep · Intra-Procedural Taint
+    │
+    └─► NETWORK GATEWAY [SESSION ENFORCER]
+             └─► INTERNET [Strict validated IP · Hostname only]
+                 (RFC 1918 / Loopback / AWS/GCP Metadata BLOCKED)
+    │
+    ▼
+EVIDENCE &amp; FINDINGS ─► ~/.routes (SQLite Database &amp; Reports)</code></pre>
+
+          <div class="pt-3 border-t border-paper/10 text-kraft text-[11px] leading-normal">
+            Assessment workloads <strong class="text-paper">never execute repository application code</strong>. Tree-sitter and Semgrep parse files statically without <code class="text-acid">npm install</code>, builds, or lifecycle scripts.
+          </div>
+        </div>
+
+        <!-- Right: Verification & Build-Run Distinction -->
+        <div class="lg:col-span-5 bg-[#2B2A27] p-6 border border-paper/20 space-y-4">
+          <div class="text-cyan font-bold text-sm border-b border-paper/10 pb-2">
+            SEPARATE WORKFLOW: BUILD &amp; RUN VERIFICATION
+          </div>
+
+          <div class="text-[11px] leading-relaxed text-paper/80 space-y-2.5">
+            <p>
+              <strong class="text-acid font-bold">`routes verify`</strong> is a separate execution pipeline (<code class="text-paper">build_run</code>) that tests applications in a disposable 3-container environment:
+            </p>
+            <div class="bg-xerox p-3 border-l-2 border-cyan space-y-1.5">
+              <div>1. <strong class="text-paper">Build Runner:</strong> Installs via fixed entrypoint (<code class="text-kraft">npm ci --ignore-scripts</code>).</div>
+              <div>2. <strong class="text-paper">Egress Revoked:</strong> Network gateway detached before any repo code runs.</div>
+              <div>3. <strong class="text-paper">Build Database:</strong> Disposable PostgreSQL seeded with schema.</div>
+              <div>4. <strong class="text-paper">Test Runner:</strong> Executes declarative HTTP test plan.</div>
+            </div>
+            <p class="text-kraft text-[10px]">
+              Fail-closed isolation self-check probes forbidden destinations. Any accepted connection immediately halts the verification run.
+            </p>
+          </div>
+
+          <div class="pt-2 border-t border-paper/10 flex items-center justify-between text-[11px]">
+            <span class="text-kraft">DYNAMIC VERIFICATION:</span>
+            <span class="bg-cyan text-xerox font-bold px-1.5 py-0.5">ISOLATED SANDBOX</span>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+</section>
+

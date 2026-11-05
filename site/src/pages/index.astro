@@ -1,0 +1,29 @@
+---
+// index.astro - ROUTES Main Landing Page
+import Layout from '../layouts/Layout.astro';
+import Header from '../components/Header.astro';
+import Hero from '../components/Hero.astro';
+import Manifesto from '../components/Manifesto.astro';
+import TerminalSection from '../components/TerminalSection.astro';
+import Architecture from '../components/Architecture.astro';
+import Roadmap from '../components/Roadmap.astro';
+import Team from '../components/Team.astro';
+import Footer from '../components/Footer.astro';
+---
+
+<Layout
+  title="ROUTES — Application Security Assessment"
+  description="Know what your application exposes. ROUTES is a developer-first application security assessment tool that maps public attack surfaces, analyses source code, and surfaces evidence-backed findings through isolated environments."
+>
+  <Header />
+  <main id="main-content">
+    <Hero />
+    <Manifesto />
+    <TerminalSection />
+    <Architecture />
+    <Roadmap />
+    <Team />
+  </main>
+  <Footer />
+</Layout>
+

@@ -1,0 +1,135 @@
+---
+// Team.astro - Dedicated Team Section in Analog Zine Aesthetic
+
+interface TeamMember {
+  handle: string;
+  name: string;
+  githubUrl: string;
+  avatarUrl: string;
+  colorClass: string;
+  rotateClass: string;
+  clipClass: string;
+}
+
+const teamMembers: TeamMember[] = [
+  {
+    handle: "EchoOfCode",
+    name: "EchoOfCode",
+    githubUrl: "https://github.com/EchoOfCode",
+    avatarUrl: "https://github.com/EchoOfCode.png",
+    colorClass: "bg-acid text-xerox",
+    rotateClass: "-rotate-1",
+    clipClass: "torn-box-jagged",
+  },
+  {
+    handle: "Nharshith73",
+    name: "Harshith N",
+    githubUrl: "https://github.com/Nharshith73",
+    avatarUrl: "https://github.com/Nharshith73.png",
+    colorClass: "bg-paper text-xerox",
+    rotateClass: "rotate-1",
+    clipClass: "torn-card-main",
+  },
+  {
+    handle: "nehalckr1",
+    name: "Nehal C K",
+    githubUrl: "https://github.com/nehalckr1",
+    avatarUrl: "https://github.com/nehalckr1.png",
+    colorClass: "bg-cyan text-paper",
+    rotateClass: "-rotate-1",
+    clipClass: "torn-box-jagged",
+  },
+  {
+    handle: "Anish-16-N",
+    name: "Anish N",
+    githubUrl: "https://github.com/Anish-16-N",
+    avatarUrl: "https://github.com/Anish-16-N.png",
+    colorClass: "bg-[#E6E2D8] text-xerox",
+    rotateClass: "rotate-1",
+    clipClass: "torn-strip",
+  },
+];
+---
+
+<section id="team" class="py-16 sm:py-24 px-4 sm:px-8 bg-[#DCD8CF] xerox-grid relative overflow-hidden border-b-4 border-xerox">
+  <div class="max-w-7xl mx-auto">
+
+    <!-- Section Heading -->
+    <div class="mb-14 flex flex-col md:flex-row md:items-end justify-between gap-6 border-b-4 border-xerox pb-6">
+      <div>
+        <span class="bg-xerox text-acid font-mono text-xs font-bold px-3 py-1 inline-block mb-3 -rotate-1">
+          ZINE SECTION // 05 · CORE ARCHITECTS
+        </span>
+        <h2 class="abstract-stretch text-3xl sm:text-5xl md:text-6xl uppercase text-xerox leading-[0.88]">
+          THE <span class="bg-acid px-3 inline-block rotate-1">TEAM.</span>
+        </h2>
+      </div>
+      <div class="max-w-md bg-paper p-4 border-2 border-xerox cutout-shadow-sm font-mono text-xs text-xerox/85">
+        <p class="mb-1.5 font-bold uppercase text-xerox">
+          CORE TEAM
+        </p>
+        <p>
+          Meet the developers behind ROUTES. Local-first architecture, isolated execution, and reproducible evidence.
+        </p>
+      </div>
+    </div>
+
+    <!-- Team Cards Grid -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 items-stretch">
+      {teamMembers.map((member, idx) => (
+        <article
+          class={`${member.colorClass} ${member.clipClass} ${member.rotateClass} p-6 cutout-shadow border-2 border-xerox flex flex-col justify-between`}
+        >
+          <div>
+            <!-- Top Stamp -->
+            <div class="flex items-center justify-between border-b border-xerox/30 pb-3 mb-5">
+              <span class="font-mono text-[11px] font-bold uppercase tracking-wider opacity-75">
+                MEMBER // 0{idx + 1}
+              </span>
+              <span class="bg-xerox text-paper font-mono text-[10px] font-bold px-2 py-0.5">
+                MEMBER
+              </span>
+            </div>
+
+            <!-- Avatar & Name -->
+            <div class="flex items-center gap-4 mb-6">
+              <div class="relative shrink-0">
+                <img
+                  src={member.avatarUrl}
+                  alt={`${member.name} (${member.handle})`}
+                  width="64"
+                  height="64"
+                  class="w-16 h-16 border-2 border-xerox filter grayscale contrast-125 object-cover bg-paper"
+                  loading="lazy"
+                />
+                <div class="absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-acid border border-xerox"></div>
+              </div>
+              <div class="overflow-hidden">
+                <h3 class="font-typewriter text-xl text-xerox leading-tight truncate">
+                  {member.name}
+                </h3>
+                <span class="font-mono text-xs text-xerox/75 font-bold block truncate mt-0.5">
+                  @{member.handle}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- GitHub Profile Link -->
+          <div class="pt-4 border-t border-xerox/20">
+            <a
+              href={member.githubUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="w-full bg-xerox hover:bg-acid text-paper hover:text-xerox font-mono font-bold text-xs px-3 py-2.5 border-2 border-xerox flex items-center justify-between transition-none cursor-pointer"
+            >
+              <span>GITHUB PROFILE</span>
+              <span class="text-xs">↗</span>
+            </a>
+          </div>
+        </article>
+      ))}
+    </div>
+
+  </div>
+</section>

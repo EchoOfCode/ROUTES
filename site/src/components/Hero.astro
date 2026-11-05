@@ -1,0 +1,465 @@
+---
+// Hero.astro - Fold 01: Exact Analog Collage Hero for ROUTES
+---
+
+<section class="relative w-full min-h-[92vh] overflow-hidden border-b-4 border-xerox bg-[#CFCBC0]">
+  <!-- BACKGROUND COLLAGE LAYER GRID -->
+  <div class="grid grid-cols-1 lg:grid-cols-12 min-h-[92vh] relative">
+
+    <!-- TOP-LEFT ACID YELLOW PANEL ("WHAT'S EXPOSED?" MARKER SCRAWL) -->
+    <div class="lg:col-span-5 bg-acid torn-box-jagged p-6 sm:p-10 lg:p-12 flex flex-col justify-between relative z-10 border-b-2 lg:border-b-0 border-xerox/20">
+      <div class="relative z-10 max-w-xs sm:max-w-sm">
+        <!-- Hand-drawn oval + WHAT'S EXPOSED? SVG -->
+        <div
+          class="relative inline-block mt-2 mb-6 select-none cursor-pointer group"
+          id="whyTrigger"
+          title="Click to cycle security field notes"
+          tabindex="0"
+          role="button"
+          aria-label="Cycle security field notes"
+        >
+          <svg viewBox="0 0 340 160" class="w-68 sm:w-80 h-auto overflow-visible">
+            <!-- Hand-sketched double oval loop -->
+            <path
+              d="M20,82 C14,30 98,12 195,15 C280,18 328,45 318,88 C306,132 215,150 120,145 C40,140 10,110 24,68 C34,40 130,22 238,28"
+              fill="none"
+              stroke="#181818"
+              stroke-width="2.6"
+              stroke-linecap="round"
+            ></path>
+            <!-- Diagonal slash accent top-right -->
+            <line x1="305" y1="30" x2="335" y2="5" stroke="#181818" stroke-width="2.2"></line>
+          </svg>
+          <div class="absolute inset-0 flex flex-col items-center justify-center -rotate-3 group-hover:rotate-0 transition-transform">
+            <span class="font-marker text-4xl sm:text-5xl text-xerox tracking-tight text-center leading-none">
+              WHAT'S<br />EXPOSED?
+            </span>
+          </div>
+        </div>
+
+        <!-- Interactive "ASK AGAIN ->" Note -->
+        <div class="mt-2 space-y-2 pl-2">
+          <button
+            id="askAgainBtn"
+            type="button"
+            class="font-scrawl text-xs sm:text-sm tracking-wide text-xerox flex items-center gap-2 hover:underline focus:outline-none cursor-pointer"
+          >
+            <span>FIELD NOTE // ASK AGAIN</span>
+            <span class="text-lg leading-none">→</span>
+          </button>
+          <p id="whyQuoteText" class="font-serif italic text-base sm:text-lg text-xerox/90 leading-snug min-h-[4rem]">
+            she’d run the scan before deployment — if it didn't vomit 400 noisy false positives.
+          </p>
+          <span class="inline-block text-[11px] font-mono uppercase tracking-widest bg-xerox text-acid px-2 py-0.5 mt-1">
+            [CLICK "ASK AGAIN" FOR FIELD OBSERVATIONS]
+          </span>
+        </div>
+      </div>
+
+      <!-- Middle-left Kraft + Cyan Halftone Scrap Overlap -->
+      <div class="hidden lg:block relative mt-8 h-36">
+        <!-- Kraft paper scrap -->
+        <div class="w-40 h-32 bg-kraft torn-box-jagged cutout-shadow absolute right-4 -top-4 rotate-2"></div>
+        <!-- Cyan pixelated halftone patch -->
+        <div class="w-44 h-40 bg-cyan torn-box-jagged cutout-shadow absolute right-2 -bottom-24 -rotate-3 p-3 flex flex-col justify-end">
+          <div class="w-full h-full halftone-dense opacity-85"></div>
+          <span class="bg-xerox text-cyan text-[10px] font-mono px-1.5 py-0.5 z-10 self-start">
+            SURFACE_MATRIX // 01
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- TOP-CENTER XEROXED ARCHIVE SCRAP (Behind Hero Card) -->
+    <div class="hidden lg:flex lg:col-span-2 bg-[#E5E2DC] halftone-black relative items-start justify-center pt-4 overflow-hidden">
+      <div class="bg-paper/90 border border-xerox p-3 rotate-6 shadow-sm max-w-[190px] text-[10px] font-mono leading-tight">
+        <div class="font-bold border-b border-xerox pb-1 mb-1">FIG 1.1 // ENGINE RUN</div>
+        <div>TARGET: https://...</div>
+        <div>ISOLATION: UID 10001</div>
+        <div>GATEWAY: RFC1918_BLOCKED</div>
+        <div>STATUS: POTENTIAL_FLOW</div>
+        <div class="mt-2 bg-xerox text-paper px-1">EVIDENCE_BACKED=TRUE</div>
+      </div>
+    </div>
+
+    <!-- TOP-RIGHT RISOGRAPH HALFTONE EXPLOSION (Interactive Canvas) -->
+    <div class="lg:col-span-5 min-h-[280px] sm:min-h-[360px] lg:min-h-[440px] relative bg-paper overflow-hidden torn-box-jagged">
+      <canvas id="risographCanvas" class="w-full h-full block cursor-crosshair" aria-label="Conceptual application attack surface visualization"></canvas>
+      <!-- Corner Stamp overlay on the halftone explosion -->
+      <div class="absolute top-4 right-4 bg-paper border-2 border-xerox px-3 py-1.5 cutout-shadow-sm pointer-events-none">
+        <p class="font-abstract text-[10px] tracking-tighter uppercase text-xerox">
+          ATTACK SURFACE BURST // MOVE CURSOR
+        </p>
+      </div>
+    </div>
+
+    <!-- BOTTOM-LEFT XEROXED ARCHITECT PORTRAIT + GRAPH GRID -->
+    <div class="lg:col-span-3 bg-[#C8C4B8] halftone-kraft relative min-h-[290px] flex flex-col justify-end overflow-hidden border-t-2 border-xerox/20">
+      <!-- High-contrast xerox halftone developer graphic with white grid overlay -->
+      <div class="relative w-full h-72 xerox-grid flex items-end justify-center pt-6">
+        <!-- Stylized Halftone SVG Silhouetted Engineer & Endpoint-to-Code mapping gesture -->
+        <svg viewBox="0 0 260 280" class="w-60 h-64 overflow-visible" aria-label="Endpoint and Code Reconnaissance Cutout">
+          <defs>
+            <pattern id="dotsPortrait" x="0" y="0" width="6" height="6" patternUnits="userSpaceOnUse">
+              <circle cx="3" cy="3" r="2.1" fill="#181818"></circle>
+            </pattern>
+            <pattern id="dotsLight" x="0" y="0" width="6" height="6" patternUnits="userSpaceOnUse">
+              <circle cx="3" cy="3" r="1.2" fill="#F2EFE9"></circle>
+            </pattern>
+          </defs>
+          <!-- Silhouetted shoulders & head in stark xerox black -->
+          <path d="M15,280 C18,210 55,185 130,185 C205,185 242,210 245,280 Z" fill="#181818"></path>
+          <!-- Collar / Graph lines -->
+          <circle cx="130" cy="105" r="56" fill="#181818"></circle>
+          <circle cx="130" cy="105" r="46" fill="url(#dotsLight)"></circle>
+          <!-- Glasses frame in stark white/red -->
+          <rect x="92" y="86" width="32" height="20" fill="#F2EFE9" stroke="#181818" stroke-width="3"></rect>
+          <rect x="136" y="86" width="32" height="20" fill="#FF3333" stroke="#181818" stroke-width="3"></rect>
+          <line x1="124" y1="95" x2="136" y2="95" stroke="#F2EFE9" stroke-width="3"></line>
+          <!-- Endpoint ↔ Code mapping graph -->
+          <path d="M75,245 L95,205 L130,225 L165,198 L182,245" fill="none" stroke="#FF3333" stroke-width="3.5" stroke-linecap="square"></path>
+          <circle cx="95" cy="205" r="5" fill="#1E60FF"></circle>
+          <circle cx="130" cy="225" r="5" fill="#FF3333"></circle>
+          <circle cx="165" cy="198" r="5" fill="#1E60FF"></circle>
+        </svg>
+
+        <!-- Small Red Torn Corner Tag -->
+        <div class="absolute bottom-0 right-0 w-32 h-28 bg-acid torn-box-jagged p-3 flex flex-col justify-between rotate-3 cutout-shadow">
+          <span class="font-mono text-[10px] font-bold uppercase">DEV_01</span>
+          <span class="font-abstract text-xs leading-none">EVIDENCE OVER ASSUMPTIONS.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- BOTTOM-CENTER KRAFT & CHARCOAL WAX SEAL SCRAP -->
+    <div class="lg:col-span-5 bg-kraft halftone-kraft relative min-h-[260px] flex items-end p-6 overflow-hidden">
+      <!-- Hand-drawn white chalk discovery-to-code spline -->
+      <svg class="absolute inset-0 w-full h-full pointer-events-none opacity-65" viewBox="0 0 400 220">
+        <path d="M10,190 Q90,40 180,140 T370,60" fill="none" stroke="#F2EFE9" stroke-width="2" stroke-dasharray="6 4"></path>
+        <circle cx="180" cy="140" r="6" fill="#FF3333" stroke="#181818" stroke-width="2"></circle>
+        <circle cx="370" cy="60" r="6" fill="#1E60FF" stroke="#181818" stroke-width="2"></circle>
+      </svg>
+      <!-- Dark charcoal stamp badge at bottom -->
+      <div class="relative z-10 bg-[#3B3A36] text-paper torn-box-jagged px-5 py-4 rotate-[-6deg] cutout-shadow border border-xerox">
+        <span class="font-mono text-xs tracking-widest uppercase block text-acid">ROUTES CORE // LABS</span>
+        <span class="font-typewriter text-lg">DISCOVERY → CODE → RISK</span>
+      </div>
+    </div>
+
+    <!-- BOTTOM-RIGHT ELECTRIC CYAN LIVE ASSESSMENT TRACE LOG + HALFTONE MAINTAINER -->
+    <div class="lg:col-span-4 grid grid-cols-1 sm:grid-cols-12 relative min-h-[300px]">
+      <!-- Electric Blue Transcript / Assessment Trace Log Strip -->
+      <div class="sm:col-span-7 bg-cyan torn-box-jagged p-5 sm:p-6 flex flex-col justify-end relative z-20 cutout-shadow text-paper">
+        <div class="mb-2 flex items-center justify-between border-b border-paper/30 pb-1">
+          <span class="font-mono text-[10px] font-bold uppercase tracking-wider text-paper">ASSESSMENT TRACE //</span>
+          <button
+            id="stepTraceBtn"
+            type="button"
+            class="bg-xerox text-acid font-mono text-[10px] px-2 py-0.5 hover:bg-paper hover:text-xerox transition-none cursor-pointer"
+          >
+            [PING NEXT ↻]
+          </button>
+        </div>
+
+        <!-- Timestamped Assessment Log -->
+        <div id="heroTraceContainer" class="space-y-2 font-mono text-xs leading-snug text-paper" aria-live="polite">
+          <div class="grid grid-cols-12 gap-1 items-baseline">
+            <span class="col-span-3 text-[11px] opacity-75">09:42</span>
+            <span class="col-span-2 font-bold">INIT</span>
+            <span class="col-span-7">Assessment initialised</span>
+          </div>
+          <div class="grid grid-cols-12 gap-1 items-baseline">
+            <span class="col-span-3 text-[11px] opacity-75">09:42</span>
+            <span class="col-span-2 font-bold">DISC</span>
+            <span class="col-span-7">Public endpoints discovered</span>
+          </div>
+          <div class="grid grid-cols-12 gap-1 items-baseline">
+            <span class="col-span-3 text-[11px] opacity-75">09:43</span>
+            <span class="col-span-2 font-bold">PROF</span>
+            <span class="col-span-7">Technology profile generated</span>
+          </div>
+          <div class="grid grid-cols-12 gap-1 items-baseline">
+            <span class="col-span-3 text-[11px] opacity-75">09:43</span>
+            <span class="col-span-2 font-bold">SOURCE</span>
+            <span class="col-span-7">Source analysis started</span>
+          </div>
+          <div class="grid grid-cols-12 gap-1 items-baseline">
+            <span class="col-span-3 text-[11px] opacity-75">09:44</span>
+            <span class="col-span-2 font-bold">TRACE</span>
+            <span class="col-span-7">
+              <mark class="bg-acid text-xerox px-1.5 py-0.5 font-bold">Potential SQL injection flow</mark>
+            </span>
+          </div>
+          <div class="grid grid-cols-12 gap-1 items-baseline">
+            <span class="col-span-3 text-[11px] opacity-75">09:44</span>
+            <span class="col-span-2 font-bold">DONE</span>
+            <span class="col-span-7">Findings available for review</span>
+          </div>
+        </div>
+
+        <div class="mt-2 text-[9px] font-mono text-xerox/70 uppercase">
+          * SAMPLE TELEMETRY DATA
+        </div>
+      </div>
+
+      <!-- Bottom-Right Maintainer Cutout + Acid Yellow Corner Tag -->
+      <div class="sm:col-span-5 bg-[#E4E1D8] halftone-black relative flex flex-col justify-end items-center pt-6 overflow-hidden">
+        <svg viewBox="0 0 220 240" class="w-48 h-52" aria-label="ROUTES Maintainer Stamp">
+          <!-- Halftone bust -->
+          <path d="M10,240 C20,175 60,155 110,155 C160,155 200,175 210,240 Z" fill="#181818"></path>
+          <circle cx="110" cy="88" r="48" fill="#181818"></circle>
+          <!-- Halftone highlight on face -->
+          <circle cx="104" cy="84" r="38" fill="#DCD8CF"></circle>
+          <path d="M78,80 L142,80" stroke="#181818" stroke-width="5"></path>
+          <path d="M88,108 Q110,122 132,108" fill="none" stroke="#181818" stroke-width="4" stroke-linecap="round"></path>
+        </svg>
+        <!-- Yellow Torn Tag at Bottom-Right Corner -->
+        <div class="absolute bottom-0 right-0 bg-acid torn-strip px-4 py-3 cutout-shadow-sm">
+          <span class="font-mono text-[11px] font-bold tracking-widest text-xerox">
+            R01 · ROUTES CORE
+          </span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- =================================================================== -->
+  <!-- CENTERPIECE TORN OFF-WHITE PAPER CARD (OVERLAPPING THE COLLAGE)     -->
+  <!-- =================================================================== -->
+  <div class="lg:absolute lg:inset-0 flex items-center justify-center p-4 sm:p-8 lg:p-12 pointer-events-none z-30">
+    <div class="pointer-events-auto relative w-full max-w-2xl my-6 lg:my-0 lg:-translate-y-6 lg:-translate-x-4">
+
+      <!-- Back Paper Shadow Layer + Curled Bottom-Right Corner Illusion -->
+      <div class="absolute -bottom-2 right-6 w-28 h-28 bg-[#D5D1C8] rotate-12 z-0 cutout-shadow"></div>
+
+      <!-- Main Torn Off-White Cardstock -->
+      <article class="bg-paper torn-card-main cutout-shadow px-6 sm:px-12 md:px-16 py-10 sm:py-14 relative z-10 border border-xerox/10">
+
+        <!-- Masking Tape Top Strip -->
+        <div class="inline-block mb-6 relative">
+          <div class="bg-[#F7F5F0] torn-strip px-4 py-1.5 cutout-shadow-sm border border-xerox/15 -rotate-1">
+            <span class="font-mono text-xs sm:text-sm tracking-[0.22em] uppercase text-xerox font-bold">
+              INDEPENDENT APPLICATION SECURITY TOOL
+            </span>
+          </div>
+        </div>
+
+        <!-- Distressed Typewriter Headline -->
+        <h1 class="font-typewriter text-4xl sm:text-5xl md:text-[54px] text-xerox leading-[1.08] tracking-tight mb-6">
+          Know what your<br />
+          application exposes<br />
+          <span class="brush-highlight-grey">with evidence.</span>
+        </h1>
+
+        <!-- Sub-copy explaining ROUTES -->
+        <p class="font-mono text-sm sm:text-base text-xerox/80 leading-relaxed max-w-lg mb-8">
+          <strong class="text-xerox font-bold">ROUTES</strong> maps your application's public surface, analyses its source code and surfaces evidence-backed security findings through isolated assessment environments.
+        </p>
+
+        <!-- CTA Row: Torn Kraft-Paper Button + Handwritten Marker Note & Arrow -->
+        <div class="flex flex-wrap items-center gap-6 sm:gap-8 pt-2">
+          <a
+            href="#terminal"
+            class="bg-kraft hover:bg-acid text-xerox font-mono font-bold text-base sm:text-lg px-8 py-4 torn-button cutout-shadow-sm border-2 border-paper inline-flex items-center gap-3 transition-none"
+          >
+            <span>EXPLORE ROUTES</span>
+            <span class="text-xs bg-xerox text-paper px-1.5 py-0.5">↓</span>
+          </a>
+
+          <a
+            href="https://github.com/EchoOfCode/ROUTES"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="bg-paper hover:bg-cyan text-xerox font-mono font-bold text-sm sm:text-base px-6 py-3.5 border-2 border-xerox cutout-shadow-sm inline-flex items-center gap-2 transition-none"
+          >
+            <span>VIEW ON GITHUB</span>
+            <span class="text-xs">↗</span>
+          </a>
+
+          <!-- Hand-scrawled arrow + "LOCAL-FIRST ASSESSMENTS // DISPOSABLE SANDBOXES" -->
+          <div class="flex items-center gap-2 select-none">
+            <svg viewBox="0 0 56 36" class="w-12 h-8 text-xerox overflow-visible" aria-hidden="true">
+              <path d="M52,28 C34,32 18,25 6,8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+              <path d="M14,8 L5,7 L8,16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+            <div class="font-scrawl text-[11px] sm:text-xs leading-relaxed text-xerox -rotate-3">
+              <div>LOCAL-FIRST ASSESSMENTS,</div>
+              <div>DISPOSABLE SANDBOXES</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Physical Page Curl Triangle at Bottom-Right of the Torn White Card -->
+        <div
+          class="hidden sm:block absolute bottom-0 right-0 w-16 h-16 pointer-events-none"
+          style="background: linear-gradient(135deg, #E2DFD7 50%, transparent 50%); box-shadow: -3px -3px 0px rgba(24,24,24,0.12);"
+        >
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- CLIENT SCRIPT FOR INTERACTIVE HERO ELEMENTS -->
+<script>
+  // 1. "ASK AGAIN ->" INTERACTIVE SECURITY FIELD NOTES CYCLER
+  const whyQuotes = [
+    "she’d run the scan before deployment — if it didn't vomit 400 noisy false positives.",
+    "he’d audit public routes — if he didn't have to piece together three disconnected tools.",
+    "they’d catch SQL injection in PR review — if taint tracking traced directly into their query helpers.",
+    "she’d inspect what her app actually exposes to the world — before someone else maps it for her."
+  ];
+  let quoteIdx = 0;
+  const whyQuoteText = document.getElementById('whyQuoteText');
+  const askAgainBtn = document.getElementById('askAgainBtn');
+  const whyTrigger = document.getElementById('whyTrigger');
+
+  function cycleQuote() {
+    if (!whyQuoteText) return;
+    quoteIdx = (quoteIdx + 1) % whyQuotes.length;
+    whyQuoteText.textContent = whyQuotes[quoteIdx];
+  }
+  if (askAgainBtn) askAgainBtn.addEventListener('click', cycleQuote);
+  if (whyTrigger) {
+    whyTrigger.addEventListener('click', cycleQuote);
+    whyTrigger.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        cycleQuote();
+      }
+    });
+  }
+
+  // 2. LIVE ASSESSMENT TRACE STEPPER
+  const traceScenarios = [
+    [
+      { time: '09:42', tag: 'INIT', text: 'Assessment initialised' },
+      { time: '09:42', tag: 'DISC', text: 'Public endpoints discovered' },
+      { time: '09:43', tag: 'PROF', text: 'Technology profile generated' },
+      { time: '09:43', tag: 'SOURCE', text: 'Source analysis started' },
+      { time: '09:44', tag: 'TRACE', text: 'Potential SQL injection flow', highlight: true },
+      { time: '09:44', tag: 'DONE', text: 'Findings available for review' }
+    ],
+    [
+      { time: '10:15', tag: 'CRAWL', text: 'Root fetch 200 OK (Next.js 14)' },
+      { time: '10:15', tag: 'ROBOT', text: 'robots.txt parsed (crawl policy only)' },
+      { time: '10:16', tag: 'PAGES', text: '18 HTML pages + 4 forms extracted' },
+      { time: '10:16', tag: 'BUNDL', text: '22 JS bundles: API routes identified' },
+      { time: '10:17', tag: 'SWAG', text: 'OpenAPI endpoint probe: none exposed' },
+      { time: '10:17', tag: 'CLEAN', text: 'Discovery container removed', highlight: true }
+    ],
+    [
+      { time: '11:02', tag: 'VERIFY', text: 'Build-and-run sandbox requested' },
+      { time: '11:02', tag: 'NET', text: 'Package network: registry.npmjs.org only' },
+      { time: '11:03', tag: 'ISOL', text: 'Egress removed: isolation probe PASSED' },
+      { time: '11:04', tag: 'DB', text: 'PostgreSQL instance seeded with schema' },
+      { time: '11:05', tag: 'TEST', text: 'Test runner executed 10 test plan cases' },
+      { time: '11:05', tag: 'RESULT', text: 'Structured evidence collected: VERIFIED_RUN', highlight: true }
+    ]
+  ];
+  let traceIdx = 0;
+  const stepTraceBtn = document.getElementById('stepTraceBtn');
+  const heroTraceContainer = document.getElementById('heroTraceContainer');
+
+  if (stepTraceBtn && heroTraceContainer) {
+    stepTraceBtn.addEventListener('click', function () {
+      traceIdx = (traceIdx + 1) % traceScenarios.length;
+      const rows = traceScenarios[traceIdx];
+      heroTraceContainer.innerHTML = rows.map(function (r) {
+        const inner = r.highlight
+          ? '<mark class="bg-acid text-xerox px-1.5 py-0.5 font-bold">' + r.text + '</mark>'
+          : r.text;
+        return (
+          '<div class="grid grid-cols-12 gap-1 items-baseline">' +
+            '<span class="col-span-3 text-[11px] opacity-75">' + r.time + '</span>' +
+            '<span class="col-span-2 font-bold">' + r.tag + '</span>' +
+            '<span class="col-span-7">' + inner + '</span>' +
+          '</div>'
+        );
+      }).join('');
+    });
+  }
+
+  // 3. RISOGRAPH HALFTONE EXPLOSION CANVAS
+  const canvas = document.getElementById('risographCanvas') as HTMLCanvasElement | null;
+  if (canvas) {
+    const ctx = canvas.getContext('2d');
+    let width = 0;
+    let height = 0;
+    let focalX = 0.45;
+    let focalY = 0.48;
+
+    function resizeCanvas() {
+      if (!canvas || !ctx) return;
+      const rect = canvas.parentElement?.getBoundingClientRect();
+      if (!rect) return;
+      width = canvas.width = Math.max(300, Math.floor(rect.width));
+      height = canvas.height = Math.max(260, Math.floor(rect.height));
+      drawRisographBurst();
+    }
+
+    function drawRisographBurst() {
+      if (!ctx) return;
+      ctx.fillStyle = '#F2EFE9';
+      ctx.fillRect(0, 0, width, height);
+
+      const cx = width * focalX;
+      const cy = height * focalY;
+      const spacing = 8;
+
+      for (let y = spacing / 2; y < height; y += spacing) {
+        for (let x = spacing / 2; x < width; x += spacing) {
+          const dx = x - cx;
+          const dy = y - cy;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const angle = Math.atan2(dy, dx);
+
+          // Starburst rays representing attack surface vectors
+          const rayWave = Math.sin(angle * 14 + dist * 0.015) + Math.cos(angle * 8 - dist * 0.025);
+
+          let color = '#FF3333'; // Screenprint Red
+          let radius = 2.8;
+
+          if (dist < 40) {
+            color = '#1E60FF'; // Blue center
+            radius = 3.2;
+          } else if (rayWave > 0.72) {
+            color = '#181818'; // Xerox black rays
+            radius = 3.2;
+          } else if (rayWave < -0.52) {
+            color = '#1E60FF'; // Blue rays
+            radius = 3.0;
+          } else if (Math.sin(angle * 22 + dist * 0.04) > 0.45) {
+            color = '#9E9A8E'; // Kraft grey midtones
+            radius = 2.4;
+          }
+
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
+    canvas.addEventListener('mousemove', function (e) {
+      const rect = canvas.getBoundingClientRect();
+      focalX = (e.clientX - rect.left) / rect.width;
+      focalY = (e.clientY - rect.top) / rect.height;
+      drawRisographBurst();
+    });
+
+    canvas.addEventListener('touchmove', function (e) {
+      if (!e.touches[0]) return;
+      const rect = canvas.getBoundingClientRect();
+      focalX = (e.touches[0].clientX - rect.left) / rect.width;
+      focalY = (e.touches[0].clientY - rect.top) / rect.height;
+      drawRisographBurst();
+    }, { passive: true });
+
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+  }
+</script>
+

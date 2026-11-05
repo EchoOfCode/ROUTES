@@ -1,0 +1,112 @@
+---
+// Manifesto.astro - Fold 02: Abstract Typography Marquee & Zine Manifesto
+---
+
+<section id="manifesto" class="relative bg-xerox text-paper border-b-4 border-xerox py-16 sm:py-24 overflow-hidden">
+  <!-- Giant Abstract Background Watermark Typography -->
+  <div class="pointer-events-none select-none overflow-hidden whitespace-nowrap border-y border-paper/20 py-3 mb-14" aria-hidden="true">
+    <div class="font-abstract text-4xl sm:text-6xl md:text-8xl uppercase tracking-tighter text-paper/10 flex gap-10">
+      <span>EVIDENCE OVER ASSUMPTIONS</span>
+      <span class="text-acid/30">///</span>
+      <span>ROUTES ENGINE</span>
+      <span class="text-cyan/30">///</span>
+      <span>ISOLATED ASSESSMENT</span>
+      <span class="text-acid/30">///</span>
+      <span>SURFACE RECON</span>
+    </div>
+  </div>
+
+  <div class="max-w-7xl mx-auto px-4 sm:px-8">
+    <!-- Abstract Typographic Header Grid -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+
+      <!-- Left Column: Acid Yellow Poster -->
+      <div class="lg:col-span-5 relative">
+        <div class="bg-acid text-xerox torn-box-jagged p-6 sm:p-8 cutout-shadow -rotate-1">
+          <div class="flex items-center justify-between border-b-2 border-xerox pb-2 mb-4">
+            <span class="font-mono text-xs font-bold">ZINE SECTION // 01</span>
+            <span class="font-mono text-xs bg-xerox text-acid px-2 py-0.5">MANIFESTO</span>
+          </div>
+
+          <h2 class="abstract-stretch text-3xl sm:text-5xl uppercase text-xerox mb-4 leading-[0.88]">
+            YOUR APPLICATION<br />
+            HAS A SURFACE.<br />
+            <span class="inline-block bg-xerox text-paper px-2 py-1 rotate-1 my-1">DO YOU KNOW</span><br />
+            WHAT'S ON IT?
+          </h2>
+
+          <p class="font-typewriter text-base sm:text-lg text-xerox mt-4 leading-snug">
+            "Most security tools vomit hundreds of context-free alerts. ROUTES pairs public surface discovery with deep source-code inspection so every finding is backed by evidence."
+          </p>
+
+          <p class="font-mono text-xs sm:text-sm text-xerox/90 mt-4 leading-relaxed">
+            ROUTES approaches application security through two complementary views: what an application exposes to the public internet, and what its source code actually constructs behind the handler.
+          </p>
+        </div>
+
+        <!-- Blue Cutout Stamp overlapping bottom-right -->
+        <div class="bg-cyan text-paper torn-strip px-5 py-3 inline-block cutout-shadow rotate-3 -mt-4 ml-6 relative z-10">
+          <span class="font-scrawl text-xs font-bold">DUAL-LENS VISIBILITY →</span>
+        </div>
+      </div>
+
+      <!-- Right Column: Before vs. After Zine Paste-Up Comparison -->
+      <div class="lg:col-span-7 grid grid-cols-1 md:grid-cols-2 gap-6">
+
+        <!-- Card 1: Fragmented Visibility (Crossed Out) -->
+        <div class="bg-[#262624] border-2 border-kraft p-6 relative">
+          <div class="absolute -top-3 left-4 bg-kraft text-xerox font-mono text-xs font-bold px-3 py-0.5">
+            EXHIBIT A // FRAGMENTED_VISIBILITY
+          </div>
+          <div class="font-mono text-xs text-paper/70 space-y-3 mt-3">
+            <p class="line-through decoration-acid decoration-2">Website discovery: 400 blind URLs without source context</p>
+            <p class="line-through decoration-acid decoration-2">Repository audit: Raw AST linter with zero exposure awareness</p>
+            <p class="line-through decoration-acid decoration-2">Database analysis: Untracked query builders &amp; false alarms</p>
+            <p class="line-through decoration-acid decoration-2">Security findings: Generic CVE lists with no reproduction path</p>
+          </div>
+          <div class="mt-6 pt-4 border-t border-paper/20 flex items-center justify-between">
+            <span class="font-scrawl text-xs text-acid">ALERT_FATIGUE</span>
+            <span class="bg-xerox text-paper text-[10px] px-2 py-0.5 border border-paper/40">DISCONNECTED</span>
+          </div>
+        </div>
+
+        <!-- Card 2: ROUTES Evidence-Backed Dual Lens -->
+        <div class="bg-paper text-xerox torn-box-jagged p-6 relative cutout-shadow rotate-1">
+          <div class="bg-cyan text-paper font-mono text-xs font-bold px-3 py-0.5 inline-block mb-3">
+            EXHIBIT B // ROUTES CORE
+          </div>
+          <pre class="font-mono text-[11px] leading-tight overflow-x-auto bg-[#E6E2D8] p-3 border border-xerox"><code>// EVIDENCE-BACKED CORRELATION
+SURFACE: POST /api/search?q=
+SOURCE:  app/api/search/route.ts:14
+TAINT:   searchParams.get("q")
+SINK:    pool.query(`SELECT ... $&lbrace;q&rbrace;`)
+STATUS:  POTENTIAL (DATA-FLOW TRACED)</code></pre>
+          <div class="mt-4 flex items-center justify-between">
+            <span class="font-typewriter text-xs font-bold bg-acid px-2 py-0.5">EVIDENCE FIRST</span>
+            <span class="font-mono text-[11px] font-bold">INTRA-PROCEDURAL TAINT</span>
+          </div>
+        </div>
+
+        <!-- Bottom Full-Width Abstract Typographic Callout -->
+        <div class="md:col-span-2 bg-kraft text-xerox p-6 torn-strip flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div>
+            <div class="font-mono text-xs uppercase tracking-widest text-xerox/80">CORE TRIAD</div>
+            <div class="font-abstract text-lg sm:text-xl md:text-2xl uppercase tracking-tight text-xerox">
+              SURFACE DISCOVERY · SOURCE ANALYSIS · ISOLATED ASSESSMENT
+            </div>
+            <p class="font-mono text-xs text-xerox/90 mt-1 max-w-xl">
+              Endpoints link to source findings only when repository matching evidence is explicitly confirmed. No assumed relationships.
+            </p>
+          </div>
+          <a
+            href="#terminal"
+            class="bg-xerox text-acid font-mono text-xs font-bold px-4 py-2.5 shrink-0 hover:bg-acid hover:text-xerox border-2 border-xerox transition-none"
+          >
+            INTERACTIVE CLI ↓
+          </a>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</section>

@@ -1,0 +1,56 @@
+---
+import '../styles/global.css';
+
+interface Props {
+  title?: string;
+  description?: string;
+}
+
+const {
+  title = "ROUTES — Application Security Assessment",
+  description = "A developer-first application security assessment tool. Discovers application exposure, analyses source code, and surfaces evidence-backed security findings through isolated environments.",
+} = Astro.props;
+
+const canonicalURL = new URL(Astro.url.pathname, "https://routes.echoofcode.com");
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="generator" content={Astro.generator} />
+
+    <!-- SEO & Metadata -->
+    <title>{title}</title>
+    <meta name="title" content={title} />
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonicalURL} />
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonicalURL} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:site_name" content="ROUTES" />
+
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:url" content={canonicalURL} />
+    <meta property="twitter:title" content={title} />
+    <meta property="twitter:description" content={description} />
+
+    <!-- Google Fonts for Analog Zine Aesthetic -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Rock+Salt&family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Special+Elite&family=Syne:wght@700;800&family=Unbounded:wght@700;900&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="paper-grain min-h-screen text-xerox antialiased">
+    <slot />
+  </body>
+</html>
+

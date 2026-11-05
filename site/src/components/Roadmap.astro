@@ -1,0 +1,136 @@
+---
+// Roadmap.astro - Fold 05: Dedicated Roadmap in Analog Zine Aesthetic
+---
+
+<section id="roadmap" class="py-16 sm:py-24 px-4 sm:px-8 bg-[#C8C4B8] xerox-grid relative overflow-hidden border-b-4 border-xerox">
+  <div class="max-w-7xl mx-auto">
+
+    <!-- Section Heading -->
+    <div class="mb-14 flex flex-col md:flex-row md:items-end justify-between gap-6 border-b-4 border-xerox pb-6">
+      <div>
+        <span class="bg-xerox text-acid font-mono text-xs font-bold px-3 py-1 inline-block mb-3 -rotate-1">
+          ZINE SECTION // 04 · EXPERIMENTAL HORIZONS
+        </span>
+        <h2 class="abstract-stretch text-3xl sm:text-5xl md:text-6xl uppercase text-xerox leading-[0.88]">
+          WHERE ROUTES <span class="bg-acid px-3 inline-block rotate-1">GOES NEXT.</span>
+        </h2>
+      </div>
+      <div class="max-w-md bg-paper p-4 border-2 border-xerox cutout-shadow-sm font-mono text-xs text-xerox/85">
+        <p class="mb-1.5 font-bold uppercase text-xerox">
+          EVOLUTIONARY TRAJECTORY · RESEARCH IN PROGRESS
+        </p>
+        <p>
+          Future directions for independent security assessment. We distinguish verified current capabilities from ongoing research horizons—no speculative release dates or marketing commitments.
+        </p>
+      </div>
+    </div>
+
+    <!-- Current vs Future Legend Bar -->
+    <div class="mb-10 bg-xerox text-paper p-4 flex flex-wrap items-center justify-between gap-4 font-mono text-xs">
+      <div class="flex items-center gap-3">
+        <span class="bg-[#2E2E2A] text-acid font-bold px-2 py-0.5 border border-acid">CURRENT PHASE 1</span>
+        <span>Next.js App/Pages Router · pg client · Static intra-procedural taint · Disposable sandboxes</span>
+      </div>
+      <div class="flex items-center gap-2 text-kraft">
+        <span>STATUS VERDICTS:</span>
+        <span class="text-paper font-bold">POTENTIAL</span>
+        <span>·</span>
+        <span class="text-paper font-bold">INCONCLUSIVE</span>
+      </div>
+    </div>
+
+    <!-- 3 Large Irregular Editorial Cutouts for Roadmap -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-8 items-stretch">
+
+      <!-- Cutout 01: BROADER SECURITY COVERAGE (Acid Yellow) -->
+      <div class="bg-acid torn-box-jagged p-8 cutout-shadow -rotate-1 flex flex-col justify-between border-2 border-xerox">
+        <div>
+          <div class="flex items-center justify-between mb-6 border-b border-xerox/30 pb-3">
+            <span class="font-abstract text-3xl text-xerox">01 //</span>
+            <span class="bg-xerox text-acid font-mono text-xs font-bold px-2.5 py-1">COVERAGE</span>
+          </div>
+          <span class="font-mono text-xs font-bold uppercase tracking-wider text-xerox/70 block mb-2">
+            RESEARCH DIRECTION
+          </span>
+          <h3 class="font-typewriter text-2xl sm:text-3xl text-xerox mb-4 leading-tight">
+            Broader Security Coverage &amp; Polyglot Analysis.
+          </h3>
+          <p class="font-mono text-xs sm:text-sm text-xerox/85 leading-relaxed space-y-3">
+            Phase 1 provides detailed taint tracking for Next.js and PostgreSQL (<code class="bg-xerox/10 px-1 font-bold">pg</code>). Future exploration focuses on expanding AST parsing and intra-procedural data-flow analysis across additional Node.js frameworks, Python backends, alternative ORMs, query builders, and database drivers without sacrificing audit transparency.
+          </p>
+        </div>
+
+        <div class="mt-8 pt-4 border-t border-xerox/30 font-mono text-xs">
+          <div class="flex justify-between items-center text-xerox font-bold mb-1">
+            <span>SCOPE: EXPANDED RUNTIMES</span>
+            <span class="text-xs">[PLANNED]</span>
+          </div>
+          <span class="text-[10px] text-xerox/70 block">
+            Incremental grammar &amp; taint sink extensions
+          </span>
+        </div>
+      </div>
+
+      <!-- Cutout 02: DEEPER SECURITY VERIFICATION (Paper) -->
+      <div class="bg-paper torn-card-main p-8 cutout-shadow rotate-1 flex flex-col justify-between border-2 border-xerox">
+        <div>
+          <div class="flex items-center justify-between mb-6 border-b border-xerox/20 pb-3">
+            <span class="font-abstract text-3xl text-xerox">02 //</span>
+            <span class="bg-cyan text-xerox font-mono text-xs font-bold px-2.5 py-1">VERIFICATION</span>
+          </div>
+          <span class="font-mono text-xs font-bold uppercase tracking-wider text-xerox/70 block mb-2">
+            RESEARCH DIRECTION
+          </span>
+          <h3 class="font-typewriter text-2xl sm:text-3xl text-xerox mb-4 leading-tight">
+            Deeper Security Verification &amp; Runtime Evidence.
+          </h3>
+          <p class="font-mono text-xs sm:text-sm text-xerox/85 leading-relaxed space-y-3">
+            Static analysis alone leaves complex flows in an inconclusive state. Building on the isolated <code class="bg-[#E6E2D8] px-1 font-bold">build_run</code> sandbox, ROUTES explores executing declarative test plans in isolated ephemeral replicas—verifying whether potential vulnerabilities can be reliably reproduced under controlled, synthetic conditions.
+          </p>
+        </div>
+
+        <div class="mt-8 pt-4 border-t border-xerox/20 font-mono text-xs">
+          <div class="flex justify-between items-center text-xerox font-bold mb-1">
+            <span>VERDICT: REPRODUCIBLE PROOF</span>
+            <span class="text-xs">[PLANNED]</span>
+          </div>
+          <span class="text-[10px] text-xerox/70 block">
+            Dynamic verification in ephemeral testbenches
+          </span>
+        </div>
+      </div>
+
+      <!-- Cutout 03: DEVELOPER REMEDIATION LOOP (Blue) -->
+      <div class="bg-cyan text-paper torn-box-jagged p-8 cutout-shadow -rotate-1 flex flex-col justify-between border-2 border-xerox">
+        <div>
+          <div class="flex items-center justify-between mb-6 border-b border-paper/30 pb-3">
+            <span class="font-abstract text-3xl text-paper">03 //</span>
+            <span class="bg-xerox text-cyan font-mono text-xs font-bold px-2.5 py-1">REMEDIATION</span>
+          </div>
+          <span class="font-mono text-xs font-bold uppercase tracking-wider text-paper/80 block mb-2">
+            RESEARCH DIRECTION
+          </span>
+          <h3 class="font-typewriter text-2xl sm:text-3xl text-paper mb-4 leading-tight">
+            Developer Remediation &amp; Validated Fix Loops.
+          </h3>
+          <p class="font-mono text-xs sm:text-sm text-paper/90 leading-relaxed space-y-3">
+            Moving beyond passive alerts towards active resolution. Exploring verified AI-assisted patch generation (<code class="bg-xerox text-cyan px-1 font-bold">routes remediate</code>) with strict constraints: baseline test reproduction, dual-model correction loops, isolated test validation, and static rescan confirmation before proposing unified diffs.
+          </p>
+        </div>
+
+        <div class="mt-8 pt-4 border-t border-paper/30 font-mono text-xs">
+          <div class="flex justify-between items-center text-paper font-bold mb-1">
+            <span>WORKFLOW: GUIDED PATCH VERIFICATION</span>
+            <span class="text-xs">[PLANNED]</span>
+          </div>
+          <span class="text-[10px] text-paper/70 block">
+            Strict all-or-nothing candidate diff validation
+          </span>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</section>
+
