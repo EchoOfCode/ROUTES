@@ -7,6 +7,21 @@ ROUTES is a local-first application security assessment tool for developers, use
 - runs static security analysis, mainly for **SQL injection** in Next.js + PostgreSQL (`pg`) applications
 - explains each finding in plain language, with evidence, a suggested fix and the limits of the analysis
 
+---
+
+<p align="center">
+  <video src="assets/routes-launch.mp4" controls="controls" width="100%" poster="assets/launch-poster.png">
+    <a href="assets/routes-launch.mp4">
+      <img src="assets/launch-poster.png" alt="Watch ROUTES Product Launch Film" width="100%" />
+    </a>
+  </video>
+</p>
+<p align="center">
+  🎬 <strong><a href="assets/routes-launch.mp4">Watch the 55-Second Product Launch Film</a></strong> · <em>Apple Minimalism × Swiss Kinetic Typography</em>
+</p>
+
+---
+
 This is **Phase 1**: discovery and static analysis. ROUTES does not attack sites, reproduce exploits or generate fixes. See [docs/PHASE_1_SCOPE.md](docs/PHASE_1_SCOPE.md).
 
 ## Quick start
