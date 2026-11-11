@@ -17,7 +17,7 @@ ROUTES is a local-first application security assessment tool for developers, use
   </video>
 </p>
 <p align="center">
-  🎬 <strong><a href="assets/routes-launch.mp4">Watch the 55-Second Product Launch Film</a></strong> · <em>Apple Minimalism × Swiss Kinetic Typography</em>
+  🎬 <strong><a href="assets/routes-launch.mp4">Watch the 55-Second Product Launch Film</a></strong> · <em></em>
 </p>
 
 ---
