@@ -1,0 +1,165 @@
+---
+// VideoSection.astro - Fold: Product Video Reel & Kinetic Briefing in Analog Zine Aesthetic
+---
+
+<section id="video" class="py-16 sm:py-24 px-4 sm:px-8 bg-[#DCD8CF] xerox-grid-dark relative overflow-hidden border-b-4 border-xerox">
+  <div class="max-w-7xl mx-auto">
+
+    <!-- Section Heading -->
+    <div class="mb-12 flex flex-col md:flex-row md:items-end justify-between gap-6 border-b-4 border-xerox pb-6">
+      <div>
+        <span class="bg-xerox text-cyan font-mono text-xs font-bold px-3 py-1 inline-block mb-3 -rotate-1">
+          KINETIC BRIEFING // 02 · 1080P
+        </span>
+        <h2 class="abstract-stretch text-3xl sm:text-5xl md:text-6xl uppercase text-xerox leading-[0.88]">
+          ROUTES IN <span class="bg-acid px-3 inline-block rotate-1 font-abstract">MOTION.</span>
+        </h2>
+      </div>
+
+      <div class="max-w-md bg-paper p-4 border-2 border-xerox cutout-shadow-sm font-mono text-xs sm:text-sm text-xerox/85">
+        <p class="mb-1 font-bold text-xerox uppercase">
+          55 SECONDS OF APPLICATION SECURITY RECON
+        </p>
+        <p>
+          Watch how ROUTES maps external exposure, reconstructs route handlers, and traces taint paths into database sinks inside disposable sandboxes.
+        </p>
+      </div>
+    </div>
+
+    <!-- Main Video Frame Container -->
+    <div class="relative max-w-5xl mx-auto">
+      
+      <!-- Masking Tape Scrap Top-Left -->
+      <div class="absolute -top-4 -left-3 sm:-left-6 z-20 pointer-events-none select-none">
+        <div class="bg-[#F7F5F0] torn-strip px-4 py-1.5 cutout-shadow-sm border border-xerox/20 -rotate-3">
+          <span class="font-mono text-[11px] font-bold text-xerox uppercase tracking-widest">
+            TAPE // REEL_01
+          </span>
+        </div>
+      </div>
+
+      <!-- Masking Tape Scrap Top-Right -->
+      <div class="absolute -top-4 -right-3 sm:-right-6 z-20 pointer-events-none select-none">
+        <div class="bg-acid torn-strip px-4 py-1.5 cutout-shadow-sm border border-xerox/20 rotate-2">
+          <span class="font-mono text-[11px] font-bold text-xerox uppercase tracking-widest">
+            HIGH DEFINITION 1080P
+          </span>
+        </div>
+      </div>
+
+      <!-- Outer Xerox Monitor Frame -->
+      <div class="bg-xerox text-paper p-3 sm:p-6 border-4 border-xerox cutout-shadow-hard relative">
+        
+        <!-- Video Header Bar -->
+        <div class="flex flex-wrap items-center justify-between border-b border-paper/20 pb-3 mb-4 text-xs font-mono gap-2">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 bg-acid inline-block animate-pulse"></span>
+            <span class="text-acid font-bold tracking-wider">REC ● ASSESSMENT_BRIEFING.MP4</span>
+          </div>
+          <div class="flex items-center gap-3 text-[11px]">
+            <span class="bg-[#2D2D2A] text-cyan px-2 py-0.5 border border-paper/20">
+              FRAMEWORK DEMO
+            </span>
+            <span class="text-kraft">DURATION: 00:55</span>
+          </div>
+        </div>
+
+        <!-- Video Player Element -->
+        <div class="relative bg-black border-2 border-xerox overflow-hidden aspect-video flex items-center justify-center">
+          <video
+            id="routesDemoVideo"
+            src="/routes-apple-1080p-hq.mp4"
+            controls
+            playsinline
+            preload="metadata"
+            class="w-full h-full object-contain bg-black focus:outline-none"
+            aria-label="ROUTES Application Security Assessment 1080p Video"
+          >
+            <p class="font-mono text-xs text-paper p-4 text-center">
+              Your browser does not support HTML5 video. Download the video directly:
+              <a href="/routes-apple-1080p-hq.mp4" class="text-cyan underline">routes-apple-1080p-hq.mp4</a>
+            </p>
+          </video>
+        </div>
+
+        <!-- Bottom Tape Ticker -->
+        <div class="mt-4 pt-3 border-t border-paper/20 flex flex-wrap items-center justify-between text-[11px] font-mono text-kraft gap-3">
+          <div class="flex items-center gap-2">
+            <span class="text-paper font-bold">[1080P KINETIC FEED]</span>
+            <span class="hidden sm:inline text-paper/60">DISCOVERY ↔ CODE ↔ VERIFIED EVIDENCE</span>
+          </div>
+          <div class="text-cyan font-bold">
+            SOUND: ON 🔊
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Jump-to-Chapter Timestamp Buttons -->
+      <div class="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
+        
+        <button
+          type="button"
+          class="video-chapter-btn bg-paper hover:bg-acid text-xerox p-3.5 border-2 border-xerox cutout-shadow-sm font-mono text-left transition-none cursor-pointer group -rotate-1"
+          data-time="0"
+        >
+          <div class="flex items-center justify-between text-[10px] font-bold text-xerox/60 mb-1">
+            <span>CHAPTER 01</span>
+            <span class="bg-xerox text-paper px-1.5 py-0.2 group-hover:bg-paper group-hover:text-xerox">00:00</span>
+          </div>
+          <div class="font-bold text-xs sm:text-sm">Public Surface Discovery</div>
+          <div class="text-[11px] text-xerox/75 mt-0.5">Crawling 25 pages &amp; endpoint profiling</div>
+        </button>
+
+        <button
+          type="button"
+          class="video-chapter-btn bg-paper hover:bg-cyan text-xerox p-3.5 border-2 border-xerox cutout-shadow-sm font-mono text-left transition-none cursor-pointer group rotate-1"
+          data-time="18"
+        >
+          <div class="flex items-center justify-between text-[10px] font-bold text-xerox/60 mb-1">
+            <span>CHAPTER 02</span>
+            <span class="bg-xerox text-paper px-1.5 py-0.2 group-hover:bg-paper group-hover:text-xerox">00:18</span>
+          </div>
+          <div class="font-bold text-xs sm:text-sm">AST Taint Propagation</div>
+          <div class="text-[11px] text-xerox/75 mt-0.5">Tracing untrusted inputs to SQL sinks</div>
+        </button>
+
+        <button
+          type="button"
+          class="video-chapter-btn bg-paper hover:bg-acid text-xerox p-3.5 border-2 border-xerox cutout-shadow-sm font-mono text-left transition-none cursor-pointer group -rotate-1"
+          data-time="38"
+        >
+          <div class="flex items-center justify-between text-[10px] font-bold text-xerox/60 mb-1">
+            <span>CHAPTER 03</span>
+            <span class="bg-xerox text-paper px-1.5 py-0.2 group-hover:bg-paper group-hover:text-xerox">00:38</span>
+          </div>
+          <div class="font-bold text-xs sm:text-sm">Evidence-Backed Findings</div>
+          <div class="text-[11px] text-xerox/75 mt-0.5">Structured potential findings &amp; limits</div>
+        </button>
+
+      </div>
+
+    </div>
+
+  </div>
+</section>
+
+<!-- CHAPTER JUMP CLIENT SCRIPT -->
+<script>
+  const video = document.getElementById('routesDemoVideo') as HTMLVideoElement | null;
+  const chapterBtns = document.querySelectorAll('.video-chapter-btn');
+
+  if (video && chapterBtns.length > 0) {
+    chapterBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const timeSec = parseFloat(btn.getAttribute('data-time') || '0');
+        if (!isNaN(timeSec)) {
+          video.currentTime = timeSec;
+          video.play().catch(() => {
+            // Autoplay with audio might require user gesture, native controls handle it
+          });
+        }
+      });
+    });
+  }
+</script>

@@ -10,14 +10,12 @@ ROUTES is a local-first application security assessment tool for developers, use
 ---
 
 <p align="center">
-  <video src="assets/routes-launch.mp4" controls="controls" width="100%" poster="assets/launch-poster.png">
-    <a href="assets/routes-launch.mp4">
-      <img src="assets/launch-poster.png" alt="Watch ROUTES Product Launch Film" width="100%" />
-    </a>
-  </video>
+  <a href="assets/routes-launch.mp4">
+    <img src="assets/launch-preview.gif" alt="ROUTES Product Launch Film" width="100%" />
+  </a>
 </p>
 <p align="center">
-  🎬 <strong><a href="assets/routes-launch.mp4">Watch the 55-Second Product Launch Film</a></strong> · <em></em>
+  🎬 <strong><a href="assets/routes-launch.mp4">Watch Full 1080p Launch Film (55s MP4)</a></strong> · <em>Apple Minimalism × Swiss Kinetic Typography</em>
 </p>
 
 ---
